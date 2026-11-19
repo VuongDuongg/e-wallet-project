@@ -193,6 +193,31 @@ class LedgerServiceTest {
             verify(walletRepository, never()).save(any());
             verify(ledgerEntryRepository, never()).save(any());
         }
+
+        @Test
+        @DisplayName("should throw IllegalArgumentException when receiver is null")
+        void executeDoubleEntry_nullReceiver_shouldThrowException() {
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, null, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Ví nhận tiền không hợp lệ");
+
+            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
+            verify(walletRepository, never()).save(any());
+            verify(ledgerEntryRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should throw IllegalArgumentException when receiver balance is null")
+        void executeDoubleEntry_receiverNullBalance_shouldThrowException() {
+            receiverWallet.setBalance(null);
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Ví nhận tiền không hợp lệ");
+
+            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
+            verify(walletRepository, never()).save(any());
+            verify(ledgerEntryRepository, never()).save(any());
+        }
     }
 
     @Nested

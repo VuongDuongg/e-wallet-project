@@ -9,6 +9,7 @@ import com.meme.vwallet.entity.Transaction;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
+import com.meme.vwallet.entity.enums.WalletStatus;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.WalletRepository;
@@ -51,6 +52,10 @@ public class PaymentService {
 
         Wallet userWallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new WalletException("Không tìm thấy ví của người dùng"));
+
+        if (userWallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Ví người dùng không ở trạng thái hoạt động: " + userWallet.getStatus());
+        }
 
         String idempotencyKey = "TOPUP_" + System.currentTimeMillis() + "_" + userId + "_" + UUID.randomUUID().toString().substring(0, 8);
         String description = request.getDescription() != null && !request.getDescription().isBlank()
@@ -129,11 +134,11 @@ public class PaymentService {
             vnpAmount = -1L;
         }
 
-        if (vnpAmount < 0 || (vnpAmount / 100L) != tx.getAmount()) {
-            log.warn("Amount mismatch for transaction {}: expected {}, received {}", txId, tx.getAmount(), vnpAmount / 100L);
+        if (vnpAmount < 0 || vnpAmount != (tx.getAmount() * 100L)) {
+            log.warn("Amount mismatch for transaction {}: expected {}, received {}", txId, tx.getAmount() * 100L, vnpAmount);
             tx.setStatus(TransactionStatus.FAILED);
             transactionRepository.save(tx);
-            return VnpayIpnResponse.invalidAmount();
+            return new VnpayIpnResponse("04", "Invalid Amount");
         }
 
         // 5. Balance mutation on gateway response code
@@ -154,6 +159,10 @@ public class PaymentService {
 
             Wallet lockedSysWallet = sysWalletId.equals(firstId) ? firstLocked : secondLocked;
             Wallet lockedUserWallet = userWalletId.equals(firstId) ? firstLocked : secondLocked;
+
+            if (lockedUserWallet.getStatus() != WalletStatus.ACTIVE) {
+                throw new WalletException("Ví người dùng không ở trạng thái hoạt động: " + lockedUserWallet.getStatus());
+            }
 
             ledgerService.executeDoubleEntry(tx, lockedSysWallet, lockedUserWallet, tx.getAmount());
 

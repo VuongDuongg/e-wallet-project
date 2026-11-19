@@ -28,6 +28,9 @@ public class LedgerService {
         if (sender == null || sender.getBalance() == null || sender.getBalance() < amount) {
             throw new InsufficientBalanceException("Số dư không đủ để thực hiện giao dịch");
         }
+        if (receiver == null || receiver.getBalance() == null) {
+            throw new IllegalArgumentException("Ví nhận tiền không hợp lệ");
+        }
 
         sender.setBalance(sender.getBalance() - amount);
         receiver.setBalance(receiver.getBalance() + amount);

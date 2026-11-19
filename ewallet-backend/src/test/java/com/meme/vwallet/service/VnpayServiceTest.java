@@ -192,5 +192,20 @@ class VnpayServiceTest {
             boolean result = vnpayService.verifySignature(params, TEST_HASH_SECRET);
             assertThat(result).isTrue();
         }
+
+        @Test
+        @DisplayName("Should return true for uppercase secure hash via case-insensitive comparison")
+        void shouldReturnTrueForUpperCaseHash() {
+            Map<String, String> params = new HashMap<>();
+            params.put("vnp_Amount", "10000000");
+            params.put("vnp_TxnRef", "1001");
+            String hashData = "vnp_Amount=10000000&vnp_TxnRef=1001";
+            String secureHash = vnpayService.hmacSHA512(TEST_HASH_SECRET, hashData);
+
+            params.put("vnp_SecureHash", secureHash.toUpperCase());
+
+            boolean result = vnpayService.verifySignature(params, TEST_HASH_SECRET);
+            assertThat(result).isTrue();
+        }
     }
 }

@@ -7,6 +7,7 @@ import com.meme.vwallet.entity.User;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
+import com.meme.vwallet.entity.enums.WalletStatus;
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
@@ -94,6 +95,13 @@ public class TransferService {
         User receiverUser = userService.findByPhoneNumber(request.getReceiverPhone());
         Wallet receiverWallet = walletRepository.findByUserId(receiverUser.getId())
                 .orElseThrow(() -> new WalletException("Không tìm thấy ví của người nhận"));
+
+        if (senderWallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Ví người gửi không ở trạng thái hoạt động: " + senderWallet.getStatus());
+        }
+        if (receiverWallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Ví người nhận không ở trạng thái hoạt động: " + receiverWallet.getStatus());
+        }
 
         // 3. Prevent self-transfer
         if (senderWallet.getId().equals(receiverWallet.getId())) {

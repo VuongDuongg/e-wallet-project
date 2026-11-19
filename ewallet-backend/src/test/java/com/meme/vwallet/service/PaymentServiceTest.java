@@ -141,6 +141,18 @@ class PaymentServiceTest {
                     .isInstanceOf(WalletException.class)
                     .hasMessageContaining("Không tìm thấy ví của người dùng");
         }
+
+        @Test
+        @DisplayName("Should throw WalletException when user wallet is not active")
+        void shouldThrowWhenUserWalletNotActive() {
+            userWallet.setStatus(WalletStatus.LOCKED);
+            when(walletRepository.findById(1L)).thenReturn(Optional.of(systemWallet));
+            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(userWallet));
+
+            assertThatThrownBy(() -> paymentService.initiateTopup(2L, TopupRequest.builder().amount(10000L).build(), "127.0.0.1"))
+                    .isInstanceOf(WalletException.class)
+                    .hasMessageContaining("Ví người dùng không ở trạng thái hoạt động");
+        }
     }
 
     @Nested
@@ -313,6 +325,61 @@ class PaymentServiceTest {
             assertThat(tx.getExternalRef()).isEqualTo("VNPay_FAILED");
             verify(transactionRepository).save(tx);
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Webhook with locked user wallet throws WalletException")
+        void shouldThrowWhenUserWalletInactiveInWebhook() {
+            userWallet.setStatus(WalletStatus.LOCKED);
+            Transaction tx = Transaction.builder()
+                    .id(2002L)
+                    .senderWallet(systemWallet)
+                    .receiverWallet(userWallet)
+                    .amount(500000L)
+                    .status(TransactionStatus.PENDING)
+                    .type(TransactionType.TOPUP)
+                    .build();
+
+            Map<String, String> params = new HashMap<>();
+            params.put("vnp_TxnRef", "2002");
+            params.put("vnp_Amount", "50000000");
+            params.put("vnp_ResponseCode", "00");
+
+            when(vnpayService.verifySignature(params)).thenReturn(true);
+            when(transactionRepository.findByIdForUpdate(2002L)).thenReturn(Optional.of(tx));
+            when(walletRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(systemWallet));
+            when(walletRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(userWallet));
+
+            assertThatThrownBy(() -> paymentService.processWebhook(params))
+                    .isInstanceOf(WalletException.class)
+                    .hasMessageContaining("Ví người dùng không ở trạng thái hoạt động");
+        }
+
+        @Test
+        @DisplayName("Webhook with fractional/truncated amount fails strict multiplication check")
+        void shouldReturn04WhenAmountIsFractionalOrTruncated() {
+            Transaction tx = Transaction.builder()
+                    .id(2002L)
+                    .senderWallet(systemWallet)
+                    .receiverWallet(userWallet)
+                    .amount(500000L)
+                    .status(TransactionStatus.PENDING)
+                    .type(TransactionType.TOPUP)
+                    .build();
+
+            Map<String, String> params = new HashMap<>();
+            params.put("vnp_TxnRef", "2002");
+            params.put("vnp_Amount", "50000099");
+
+            when(vnpayService.verifySignature(params)).thenReturn(true);
+            when(transactionRepository.findByIdForUpdate(2002L)).thenReturn(Optional.of(tx));
+
+            VnpayIpnResponse response = paymentService.processWebhook(params);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getRspCode()).isEqualTo("04");
+            assertThat(response.getMessage()).isEqualTo("Invalid Amount");
+            assertThat(tx.getStatus()).isEqualTo(TransactionStatus.FAILED);
         }
     }
 

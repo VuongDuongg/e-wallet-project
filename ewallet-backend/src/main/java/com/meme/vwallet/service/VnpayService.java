@@ -10,6 +10,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -145,7 +146,9 @@ public class VnpayService {
         }
 
         String calculatedHash = hmacSHA512(secretKey, hashData.toString());
-        return calculatedHash.equalsIgnoreCase(vnpSecureHash);
+        byte[] calculated = calculatedHash.toLowerCase().getBytes(StandardCharsets.UTF_8);
+        byte[] received = vnpSecureHash.toLowerCase().getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(calculated, received);
     }
 
     /**

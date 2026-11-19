@@ -350,5 +350,43 @@ class TransferServiceTest {
             // Verify no receipt saved
             verify(idempotencyService, never()).saveReceipt(any(), any(), any());
         }
+
+        @Test
+        @DisplayName("should throw WalletException when sender wallet is not active")
+        void shouldThrowWhenSenderWalletNotActive() {
+            senderWallet.setStatus(WalletStatus.LOCKED);
+            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(1L)).thenReturn(senderUser);
+            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(receiverUser);
+            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+
+            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+                    .isInstanceOf(WalletException.class)
+                    .hasMessageContaining("Ví người gửi không ở trạng thái hoạt động");
+
+            verify(idempotencyService).releaseLock(redisKey);
+        }
+
+        @Test
+        @DisplayName("should throw WalletException when receiver wallet is not active")
+        void shouldThrowWhenReceiverWalletNotActive() {
+            receiverWallet.setStatus(WalletStatus.CLOSED);
+            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(1L)).thenReturn(senderUser);
+            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(receiverUser);
+            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+
+            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+                    .isInstanceOf(WalletException.class)
+                    .hasMessageContaining("Ví người nhận không ở trạng thái hoạt động");
+
+            verify(idempotencyService).releaseLock(redisKey);
+        }
     }
 }
