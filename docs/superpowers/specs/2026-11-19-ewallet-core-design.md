@@ -53,11 +53,11 @@ The design guarantees:
 | **Option C** | Event-Sourcing with Apache Kafka as primary source of truth | Extreme write throughput, but adds eventual consistency complexity and non-trivial reconciliation for real-time balance queries. | Deferred for future analytics/event streaming. |
 
 ### 3.2 Core Dependencies
-- **Runtime:** Java 21 (LTS target via `--release 21` for maximum compatibility with Spring Boot 3.x, ByteBuddy, Mockito, and Lombok)
+- **Runtime:** Java 25 (sử dụng `-XX:+EnableDynamicAgentLoading` và `-Dnet.bytebuddy.experimental=true` trên Surefire để tương thích hoàn toàn với Mockito/ByteBuddy; Lombok 1.18.36+)
 - **Persistence:** `spring-boot-starter-data-jpa`, `com.mysql:mysql-connector-j`
 - **Cache & Concurrency:** `spring-boot-starter-data-redis` (Lettuce), Redis 7
 - **Security & Crypto:** `spring-boot-starter-security` (BCryptPasswordEncoder), Commons Codec / Java Cryptography (HMAC-SHA512)
-- **Utilities:** Lombok, Validation (`jakarta.validation-api`)
+- **Utilities:** Lombok (1.18.36+), Validation (`jakarta.validation-api`)
 
 ---
 

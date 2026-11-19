@@ -6,7 +6,7 @@
 
 **Architecture:** Monolithic modular Spring Boot application with Spring Data JPA/Hibernate on MySQL 8.0 (InnoDB) and Redis 7. Deterministic row locking (`min/max` wallet ID order) guarantees deadlock-free transfers; double-entry ledger entries back every balance mutation; and Redis `SETNX` prevents duplicate executions.
 
-**Tech Stack:** Java 21 (LTS target via `--release 21`), Spring Boot 3.x/4.x, Spring Data JPA / Hibernate, MySQL 8.0, Redis 7, Spring Security (BCrypt), Docker Compose, JUnit 5, Mockito.
+**Tech Stack:** Java 25, Spring Boot 3.x/4.x, Spring Data JPA / Hibernate, MySQL 8.0, Redis 7, Spring Security (BCrypt), Docker Compose, JUnit 5, Mockito.
 
 **Spec:** [docs/superpowers/specs/2026-11-19-ewallet-core-design.md](file:///d:/Project_Java/e-wallet-project/docs/superpowers/specs/2026-11-19-ewallet-core-design.md)
 
@@ -108,13 +108,25 @@ d:/Project_Java/e-wallet-project/
   - Service `redis`: image `redis:7-alpine`, port `6379:6379`.
   - Persistent volumes for `mysql_data` and `redis_data`.
 
-- [ ] **Step 2: Update `ewallet-backend/pom.xml` dependencies & Java version**
-  - Set `<java.version>21</java.version>` and configure `maven-compiler-plugin` with `<release>21</release>` to ensure 100% bytecode compatibility with Lombok, ByteBuddy, and Mockito.
-  - Replace `org.postgresql:postgresql` with `com.mysql:mysql-connector-j`.
-  - Replace `spring-boot-starter-data-jdbc` with `spring-boot-starter-data-jpa`.
-  - Add `spring-boot-starter-data-redis`.
-  - Add `spring-boot-starter-validation`.
-  - Add `commons-codec:commons-codec` (for HMAC-SHA512).
+- [ ] **Step 2: Update `ewallet-backend/pom.xml` dependencies & Java 25 configuration**
+  - Set `<java.version>25</java.version>`.
+  - Cấu hình Lombok phiên bản mới nhất (`1.18.36`) trong `dependencies` và `annotationProcessorPaths`.
+  - Cấu hình `maven-surefire-plugin` với cờ JVM:
+    ```xml
+    <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+            <argLine>-XX:+EnableDynamicAgentLoading -Dnet.bytebuddy.experimental=true</argLine>
+        </configuration>
+    </plugin>
+    ```
+    *(Cờ `-Dnet.bytebuddy.experimental=true` giúp ByteBuddy/Mockito tạo mock class trên Java 25 mà không bị lỗi class file version 69; cờ `-XX:+EnableDynamicAgentLoading` cho phép attach mock agent động).*
+  - Thay `org.postgresql:postgresql` thành `com.mysql:mysql-connector-j`.
+  - Thay `spring-boot-starter-data-jdbc` thành `spring-boot-starter-data-jpa`.
+  - Thêm `spring-boot-starter-data-redis`.
+  - Thêm `spring-boot-starter-validation`.
+  - Thêm `commons-codec:commons-codec` (cho HMAC-SHA512).
 
 - [ ] **Step 3: Update `src/main/resources/application.yaml`**
   Configure datasource URL `jdbc:mysql://localhost:3306/vwallet?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true`, username `vwallet_user`, password `vwallet_password`, hibernate ddl-auto `none`, redis host `localhost` port `6379`.
