@@ -11,6 +11,8 @@ import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.WalletRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +39,9 @@ public class TransferService {
     @Autowired
     @Lazy
     private TransferService self;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     /**
      * Outer non-transactional orchestration method.
@@ -97,6 +102,13 @@ public class TransferService {
 
         // 4. Verify PIN
         userService.verifyPin(senderUserId, request.getPin());
+
+        // Detach un-locked wallet entities from persistence context to ensure
+        // findByIdForUpdate loads the latest state and version from the locked DB row.
+        if (entityManager != null) {
+            entityManager.detach(senderWallet);
+            entityManager.detach(receiverWallet);
+        }
 
         // 5. Deterministic pessimistic locking in ascending order min(idA, idB) -> max(idA, idB)
         Long firstId = Math.min(senderWallet.getId(), receiverWallet.getId());
