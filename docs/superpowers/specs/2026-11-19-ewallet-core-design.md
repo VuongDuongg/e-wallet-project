@@ -53,9 +53,9 @@ The design guarantees:
 | **Option C** | Event-Sourcing with Apache Kafka as primary source of truth | Extreme write throughput, but adds eventual consistency complexity and non-trivial reconciliation for real-time balance queries. | Deferred for future analytics/event streaming. |
 
 ### 3.2 Core Dependencies
-- **Runtime:** Java 25 / Spring Boot 3.x/4.x
+- **Runtime:** Java 21 (LTS target via `--release 21` for maximum compatibility with Spring Boot 3.x, ByteBuddy, Mockito, and Lombok)
 - **Persistence:** `spring-boot-starter-data-jpa`, `com.mysql:mysql-connector-j`
-- **Cache & Concurrency:** `spring-boot-starter-data-redis` (Jedis/Lettuce), Redis 7
+- **Cache & Concurrency:** `spring-boot-starter-data-redis` (Lettuce), Redis 7
 - **Security & Crypto:** `spring-boot-starter-security` (BCryptPasswordEncoder), Commons Codec / Java Cryptography (HMAC-SHA512)
 - **Utilities:** Lombok, Validation (`jakarta.validation-api`)
 
@@ -123,7 +123,7 @@ erDiagram
 
 ```sql
 -- 1. Users table
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     phone_number VARCHAR(15) NOT NULL UNIQUE,
     full_name VARCHAR(100) NOT NULL,
@@ -135,7 +135,7 @@ CREATE TABLE users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 2. Wallets table (System Wallet id = 1)
-CREATE TABLE wallets (
+CREATE TABLE IF NOT EXISTS wallets (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL UNIQUE,
     balance BIGINT NOT NULL DEFAULT 0,
@@ -148,7 +148,7 @@ CREATE TABLE wallets (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 3. Transactions table
-CREATE TABLE transactions (
+CREATE TABLE IF NOT EXISTS transactions (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     idempotency_key VARCHAR(64) NOT NULL UNIQUE,
     sender_wallet_id BIGINT NOT NULL,
@@ -167,7 +167,7 @@ CREATE TABLE transactions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 4. Ledger Entries table (Append-only)
-CREATE TABLE ledger_entries (
+CREATE TABLE IF NOT EXISTS ledger_entries (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     transaction_id BIGINT NOT NULL,
     wallet_id BIGINT NOT NULL,
@@ -183,9 +183,10 @@ CREATE TABLE ledger_entries (
 ```
 
 ### 4.3 System Account Bootstrap (Seed Data) & Accounting Semantics
-The system must pre-populate:
+The system must pre-populate via `data.sql` using `INSERT IGNORE INTO` so the app is restart-safe:
 - User ID = 1: `SYSTEM_USER` (Phone: `0000000000`, Name: `Hệ Thống Ví V-Wallet`, Status: `ACTIVE`)
 - Wallet ID = 1: `SYSTEM_WALLET` (User ID = 1, initial balance: `1,000,000,000,000` VND for funding/top-up clearing).
+- Demo Users: User A (Phone: `0901234567`), User B (Phone: `0987654321`) with initial wallets.
 
 *(Builder Decision: `SYSTEM_WALLET` hoạt động như tài khoản vốn đối ứng/clearing cho các giao dịch nạp tiền. Trong milestone 1, việc khóa bản ghi hàng đợi theo thứ tự `min(1, userWalletId)` đảm bảo tính tuần tự tuyệt đối mà không gây nghẽn nghiêm trọng cho tải dev/staging. Hướng mở rộng cho high-throughput trong tương lai sẽ là áp dụng multi-bucket system wallets).*
 
@@ -195,36 +196,29 @@ The system must pre-populate:
 
 ### 5.1 Luồng 1: Chuyển tiền nội bộ (P2P Transfer)
 
-#### 5.1.1 Quy trình thực thi tuần tự
-1. **Idempotency Gate (Redis):**
-   - Check key `idempotency:transfer:{key}` using `SETNX` with a 120-second TTL (status: `PROCESSING`).
-   - If key exists and status is `COMPLETED`, immediately return the cached receipt payload.
-   - If key exists and status is `PROCESSING`, reject request with `409 Conflict` (giao dịch đang được xử lý).
-2. **PIN Verification & Early Validation:**
-   - Retrieve sender's `pin_hash` via `IUserService`.
-   - Validate input PIN using BCrypt. If invalid, **evict the Redis `PROCESSING` key immediately** and throw `InvalidPinException` (400 Bad Request) so the user can re-attempt with corrected PIN without being blocked for 120s.
-3. **Deadlock Prevention Algorithm:**
-   - Identify sender wallet ID ($W_{sender}$) and receiver wallet ID ($W_{receiver}$).
-   - Order the IDs: $W_{first} = \min(W_{sender}, W_{receiver})$, $W_{second} = \max(W_{sender}, W_{receiver})$.
-   - Execute JPA Pessimistic Write locks sequentially:
+#### 5.1.1 Quy trình thực thi tuần tự & Cô lập Transaction
+Để đảm bảo Redis cache không bị lưu sai khi DB rollback và không xảy ra xung đột key giữa các người dùng:
+1. **Namespaced Idempotency Key:**
+   - Key Redis có cấu trúc: `idemp:transfer:{senderUserId}:{idempotencyKey}` (gắn chặt với `senderUserId`).
+2. **Lớp điều phối bên ngoài (KHÔNG gắn `@Transactional`):**
+   - **Bước A (Kiểm tra cache):** Gọi `idempotencyService.getReceipt(key)`. Nếu đã có biên lai hoàn tất $\rightarrow$ Trả về ngay `200 OK` (chống trừ tiền 2 lần).
+   - **Bước B (Khóa phân tán):** Gọi `idempotencyService.acquireLock(key)` (`SETNX` giá trị `"PROCESSING"`, TTL 120s). Nếu thất bại (đang có request khác xử lý) $\rightarrow$ Ném ngoại lệ `IdempotencyConflictException` (409 Conflict).
+   - **Bước C (Thực thi trong khối try):**
+     - Gọi hàm nghiệp vụ nội bộ `executeTransferTx(senderUserId, request)` (Hàm này mới gắn `@Transactional`).
+     - Ngay sau khi `executeTransferTx` commit thành công ra ngoài, gọi `idempotencyService.saveReceipt(key, response, Duration.ofHours(24))`.
+   - **Bước D (Xử lý ngoại lệ trong khối catch):**
+     - Nếu có bất kỳ Exception nào xảy ra (kể cả lỗi validation 400 như sai PIN, thiếu tiền hay lỗi 500), gọi ngay `idempotencyService.releaseLock(key)` để xóa khóa, cho phép người dùng thử lại ngay lập tức mà không bị kẹt 120s, sau đó rethrow ngoại lệ ra `GlobalExceptionHandler`.
+3. **Quy trình bên trong `@Transactional` (`executeTransferTx`):**
+   - **Kiểm tra tự chuyển tiền:** Lấy ví gửi và ví nhận. Nếu `senderWallet.getId().equals(receiverWallet.getId())` $\rightarrow$ Ném `WalletException("Không thể tự chuyển tiền cho chính mình")`.
+   - **Xác thực PIN:** Gọi `userService.verifyPin(senderUserId, pin)`. Sai PIN $\rightarrow$ Ném `InvalidPinException`.
+   - **Deadlock-Free Locking:** Sắp xếp 2 ID ví tăng dần `firstId = min(idA, idB)` và `secondId = max(idA, idB)`. Khóa lần lượt:
      ```java
      walletRepository.findByIdForUpdate(firstId);
      walletRepository.findByIdForUpdate(secondId);
      ```
-   - This ensures all threads acquire locks in identical global order (ascending), mathematically eliminating circular wait conditions (deadlocks).
-4. **Validation & Balance Check:**
-   - Verify both wallets are in `ACTIVE` status.
-   - Verify $Balance_{sender} \ge Amount$. If insufficient, **evict the Redis `PROCESSING` key immediately**, execute rollback, and throw `InsufficientBalanceException` (400 Bad Request).
-   - *(Note: Following the sequence diagram, failed P2P validations do not pollute the `transactions` table with phantom records; the transaction rolls back cleanly).*
-5. **Atomic Execution (`@Transactional`):**
-   - Deduct sender balance: $Balance_{sender}^{new} = Balance_{sender} - Amount$.
-   - Credit receiver balance: $Balance_{receiver}^{new} = Balance_{receiver} + Amount$.
-   - Insert `Transaction`: `type = P2P_TRANSFER`, `status = COMPLETED`.
-   - Insert `LedgerEntry` 1: `wallet_id = W_{sender}`, `entry_type = DEBIT`, `amount = Amount`, `balance_after = Balance_{sender}^{new}`.
-   - Insert `LedgerEntry` 2: `wallet_id = W_{receiver}`, `entry_type = CREDIT`, `amount = Amount`, `balance_after = Balance_{receiver}^{new}`.
-6. **Post-Commit & Cache Result:**
-   - Update Redis key with the completed receipt payload (TTL: 24 hours).
-   - Return `TransferResponse` DTO (HTTP 200 OK).
+   - **Kiểm tra số dư:** Nếu `senderWallet.getBalance() < amount` $\rightarrow$ Ném `InsufficientBalanceException`.
+   - **Hạch toán nguyên tử:** Trừ tiền ví gửi, cộng tiền ví nhận, insert `Transaction` (status = `COMPLETED`), insert 2 `LedgerEntry` (`DEBIT` ví gửi, `CREDIT` ví nhận).
+   - Commit transaction và trả về `TransferResponse`.
 
 ---
 
@@ -247,30 +241,34 @@ The system must pre-populate:
 5. Trả về cho Mobile Client: `{ "transactionId": 123, "paymentUrl": "..." }`.
 
 #### 5.2.2 Pha 2: Xử lý Webhook Callback (IPN)
-1. Gateway gọi endpoint: `POST /api/v1/payments/webhook` (hoặc VNPay IPN).
-2. **Kiểm tra chữ ký (Security Check):**
+Thực hiện đúng 5 bước kiểm tra tuần tự trong `@Transactional` để chống race condition và sai lệch số tiền:
+1. **Kiểm tra chữ ký (Security Check):**
    - Tách `vnp_SecureHash` khỏi payload.
-   - Sắp xếp các tham số theo thứ tự alphabet và tính lại HMAC-SHA512 với `SecretKey`.
-   - So sánh hằng chuỗi (constant-time compare). Nếu không khớp: trả về `{ "RspCode": "97", "Message": "Invalid Checksum" }`.
-3. **Idempotent Webhook Check:**
-   - Tra cứu `Transaction` theo `vnp_TxnRef`.
-   - Nếu không tìm thấy: trả về `{ "RspCode": "01", "Message": "Order Not Found" }`.
-   - Nếu `status != PENDING`: Giao dịch đã được xử lý trước đó $\rightarrow$ Trả về ngay `{ "RspCode": "00", "Message": "Order already confirmed" }` (không cộng tiền lần 2).
-4. **Xử lý hạch toán thành công (`vnp_ResponseCode == '00'`):**
+   - Sắp xếp các tham số alphabet và tính lại HMAC-SHA512 với `SecretKey`.
+   - Nếu chữ ký không khớp $\rightarrow$ Trả về ngay `{ "RspCode": "97", "Message": "Invalid Checksum" }`.
+2. **Khóa dòng Transaction (Row-Level Locking):**
    - Mở giao dịch `@Transactional`.
-   - Khóa bản ghi giao dịch: `SELECT ... FROM transactions WHERE id = ? FOR UPDATE`.
-   - Khóa ví theo thứ tự ID: `min(1, userWalletId)` và `max(1, userWalletId)`.
+   - Khóa dòng bản ghi giao dịch: `transactionRepository.findByIdForUpdate(txId)`.
+   - Nếu không tìm thấy giao dịch $\rightarrow$ Trả về `{ "RspCode": "01", "Message": "Order Not Found" }`.
+3. **Chống lặp Webhook (Idempotent Check):**
+   - Nếu `tx.getStatus() == TransactionStatus.COMPLETED` $\rightarrow$ Trả về ngay `{ "RspCode": "00", "Message": "Order already confirmed" }` (không hạch toán lần 2).
+4. **Đối chiếu số tiền (Amount Integrity Check):**
+   - VNPay quy ước số tiền nhân 100.
+   - Kiểm tra: `Long.parseLong(params.get("vnp_Amount")) / 100 == tx.getAmount()`.
+   - Nếu số tiền bị lệch $\rightarrow$ Cập nhật `tx.setStatus(FAILED)` và trả về `{ "RspCode": "04", "Message": "Invalid Amount" }`.
+5. **Hạch toán điều chuyển tiền (`vnp_ResponseCode == '00'`):**
+   - Khóa ví theo thứ tự ID tăng dần: `firstId = min(1, userWalletId)` và `secondId = max(1, userWalletId)`.
    - Cập nhật ví hệ thống: $Balance_{sys} = Balance_{sys} - Amount$.
    - Cập nhật ví người dùng: $Balance_{user} = Balance_{user} + Amount$.
    - Cập nhật transaction: `status = 'COMPLETED'`, `external_ref = vnp_TransactionNo`.
    - Ghi sổ cái:
      - `DEBIT` Ví Hệ thống (amount = Amount, balance_after = $Balance_{sys}^{new}$).
      - `CREDIT` Ví Người dùng (amount = Amount, balance_after = $Balance_{user}^{new}$).
-   - Commit transaction.
-5. **Xử lý thất bại (`vnp_ResponseCode != '00'`):**
+   - Commit transaction và trả về `{ "RspCode": "00", "Message": "Confirm Success" }`.
+6. **Xử lý khi thanh toán thất bại (`vnp_ResponseCode != '00'`):**
    - Cập nhật transaction: `status = 'FAILED'`, `external_ref = vnp_TransactionNo`.
    - Không biến động số dư, không tạo ledger entry.
-6. Phản hồi Gateway: `{ "RspCode": "00", "Message": "Confirm Success" }`.
+   - Trả về `{ "RspCode": "00", "Message": "Confirm Success" }` để cổng thanh toán dừng gửi lại callback.
 
 ---
 

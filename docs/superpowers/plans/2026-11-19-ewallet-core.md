@@ -6,7 +6,7 @@
 
 **Architecture:** Monolithic modular Spring Boot application with Spring Data JPA/Hibernate on MySQL 8.0 (InnoDB) and Redis 7. Deterministic row locking (`min/max` wallet ID order) guarantees deadlock-free transfers; double-entry ledger entries back every balance mutation; and Redis `SETNX` prevents duplicate executions.
 
-**Tech Stack:** Java 25, Spring Boot 3.x/4.x, Spring Data JPA / Hibernate, MySQL 8.0, Redis 7, Spring Security (BCrypt), Docker Compose, JUnit 5, Mockito.
+**Tech Stack:** Java 21 (LTS target via `--release 21`), Spring Boot 3.x/4.x, Spring Data JPA / Hibernate, MySQL 8.0, Redis 7, Spring Security (BCrypt), Docker Compose, JUnit 5, Mockito.
 
 **Spec:** [docs/superpowers/specs/2026-11-19-ewallet-core-design.md](file:///d:/Project_Java/e-wallet-project/docs/superpowers/specs/2026-11-19-ewallet-core-design.md)
 
@@ -14,11 +14,13 @@
 
 ## Global Constraints
 
-- Database: MySQL 8.0 InnoDB with `CHECK (balance >= 0)`.
+- Database & Restart Safety: MySQL 8.0 InnoDB with `CHECK (balance >= 0)`. DDL must use `CREATE TABLE IF NOT EXISTS`, seed data must use `INSERT IGNORE INTO`, and `application.yaml` must set `spring.sql.init.mode: always`.
 - Currency: Exclusively Vietnamese Dong (`VND`), represented as `Long` / `BIGINT`.
 - Balance Mutation Invariant: Zero balance changes without corresponding immutable `ledger_entries` in the same `@Transactional`.
 - Deadlock Prevention: Wallet locks must always be acquired in strictly ascending order: `min(idA, idB)` then `max(idA, idB)`.
-- Idempotency Key: Header `Idempotency-Key` (max 64 chars) cached in Redis with 120s `PROCESSING` lock and 24h `COMPLETED` receipt cache.
+- Self-Transfer Prevention: Chặn tự chuyển tiền cho chính mình (`senderWallet.getId().equals(receiverWallet.getId())`) trước khi khóa ví.
+- Idempotency Isolation: Key định dạng `idemp:transfer:{senderUserId}:{idempotencyKey}`. Thao tác Redis (lock/cache) đặt ở tầng điều phối bên ngoài ranh giới `@Transactional`.
+- Webhook Concurrency & Integrity: Khóa dòng giao dịch bằng `transactionRepository.findByIdForUpdate(id)`, kiểm tra chữ ký (`97`), kiểm tra tồn tại (`01`), kiểm tra idempotency (`00`), và đối soát số tiền khớp 100% (`04`).
 - Authentication abstraction: Read user identity via `X-User-Id` header resolved into `@CurrentUser Long userId`.
 
 ---
@@ -28,8 +30,9 @@
 1. **Simultaneous Bidirectional P2P Transfers:** User A transfers to User B while User B transfers to User A at the exact same millisecond. Must never result in a MySQL deadlock (exercised in Task 8).
 2. **Double-Click / Replayed Transfer Requests:** Client sends the same `Idempotency-Key` within 100ms. Must only debit the sender once and return the exact cached receipt (exercised in Task 5 & Task 6).
 3. **Overdraft / Insufficient Balance Attempt:** Client attempts to transfer more than wallet balance. Must reject with 400, release/evict Redis lock key immediately, and produce no database changes (exercised in Task 6).
-4. **Duplicate Webhook Callbacks:** Payment gateway delivers the same successful callback (`vnp_TxnRef`) twice. The second call must not credit the user wallet a second time (exercised in Task 7).
-5. **Tampered Webhook Signature:** Attacker alters `vnp_Amount` in callback. Signature validation must fail with response code `97` and make no state changes (exercised in Task 7).
+4. **Self-Transfer Attempt:** User transfers to their own phone number. Must reject immediately with `WalletException` before acquiring locks (exercised in Task 6).
+5. **Duplicate Webhook Callbacks:** Payment gateway delivers the same successful callback (`vnp_TxnRef`) twice. The second call must not credit the user wallet a second time and return `RspCode: 00` (exercised in Task 7 & Task 8).
+6. **Tampered Webhook Amount / Signature:** Attacker alters `vnp_Amount` (returns `RspCode: 04`) or signature (returns `RspCode: 97`) in callback. Must make no state changes (exercised in Task 7).
 
 ---
 
@@ -105,7 +108,8 @@ d:/Project_Java/e-wallet-project/
   - Service `redis`: image `redis:7-alpine`, port `6379:6379`.
   - Persistent volumes for `mysql_data` and `redis_data`.
 
-- [ ] **Step 2: Update `ewallet-backend/pom.xml` dependencies**
+- [ ] **Step 2: Update `ewallet-backend/pom.xml` dependencies & Java version**
+  - Set `<java.version>21</java.version>` and configure `maven-compiler-plugin` with `<release>21</release>` to ensure 100% bytecode compatibility with Lombok, ByteBuddy, and Mockito.
   - Replace `org.postgresql:postgresql` with `com.mysql:mysql-connector-j`.
   - Replace `spring-boot-starter-data-jdbc` with `spring-boot-starter-data-jpa`.
   - Add `spring-boot-starter-data-redis`.
@@ -113,7 +117,14 @@ d:/Project_Java/e-wallet-project/
   - Add `commons-codec:commons-codec` (for HMAC-SHA512).
 
 - [ ] **Step 3: Update `src/main/resources/application.yaml`**
-  Configure datasource URL `jdbc:mysql://localhost:3306/vwallet?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true`, username `vwallet_user`, password `vwallet_password`, hibernate ddl-auto `validate` (or `none`), redis host `localhost` port `6379`.
+  Configure datasource URL `jdbc:mysql://localhost:3306/vwallet?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true`, username `vwallet_user`, password `vwallet_password`, hibernate ddl-auto `none`, redis host `localhost` port `6379`.
+  Add database initialization:
+  ```yaml
+  spring:
+    sql:
+      init:
+        mode: always
+  ```
 
 - [ ] **Step 4: Verify application build & context load**
   Run: `mvn clean test-compile` (in `ewallet-backend/`)
@@ -153,10 +164,11 @@ d:/Project_Java/e-wallet-project/
   - `WalletRepository.findByUserId(Long userId): Optional<Wallet>`
   - `UserRepository.findByPhoneNumber(String phone): Optional<User>`
   - `TransactionRepository.findByIdempotencyKey(String key): Optional<Transaction>`
+  - `TransactionRepository.findByIdForUpdate(Long id): Optional<Transaction>` with `@Lock(LockModeType.PESSIMISTIC_WRITE)`
 
-- [ ] **Step 1: Write `schema.sql` and `data.sql`**
-  - Implement full DDL for `users`, `wallets`, `transactions`, `ledger_entries` matching Section 4.2 of Spec. Include `CHECK (balance >= 0)`.
-  - In `data.sql`, seed:
+- [ ] **Step 1: Write `schema.sql` and `data.sql` with restart-safe statements**
+  - Implement full DDL using `CREATE TABLE IF NOT EXISTS` for `users`, `wallets`, `transactions`, `ledger_entries` matching Section 4.2 of Spec. Include `CHECK (balance >= 0)`.
+  - In `data.sql`, use `INSERT IGNORE INTO` to seed:
     - User 1: `phone_number = '0000000000'`, `full_name = 'SYSTEM_USER'`, `status = 'ACTIVE'`, `password_hash = '$2a$10$...'`.
     - Wallet 1: `user_id = 1`, `balance = 1000000000000`, `currency = 'VND'`, `status = 'ACTIVE'`.
     - User 2: `phone_number = '0901234567'`, `full_name = 'Nguyen Van A'`, `pin_hash` for "123456".
@@ -168,12 +180,18 @@ d:/Project_Java/e-wallet-project/
   - Define `User`, `Wallet`, `Transaction`, `LedgerEntry` matching the schema and relations.
   - In `Wallet.java`, map `version` as `@Version` for optimistic locking fallback, balance as `Long`, status as `WalletStatus`.
 
-- [ ] **Step 3: Create Spring Data JPA Repositories**
+- [ ] **Step 3: Create Spring Data JPA Repositories with pessimistic locks**
   - Implement `WalletRepository`:
     ```java
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM Wallet w WHERE w.id = :id")
     Optional<Wallet> findByIdForUpdate(@Param("id") Long id);
+    ```
+  - Implement `TransactionRepository`:
+    ```java
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM Transaction t WHERE t.id = :id")
+    Optional<Transaction> findByIdForUpdate(@Param("id") Long id);
     ```
 
 - [ ] **Step 4: Write unit/slice test for `WalletRepositoryTest`**
@@ -288,12 +306,14 @@ d:/Project_Java/e-wallet-project/
 **Interfaces:**
 - Consumes: Task 1 (Redis Starter)
 - Produces:
+  - Key formatting: `formatTransferKey(Long senderUserId, String idempotencyKey) -> "idemp:transfer:" + senderUserId + ":" + idempotencyKey`
   - `IdempotencyService.acquireLock(String key): boolean` (calls `SETNX` with 120s TTL).
-  - `IdempotencyService.releaseLock(String key): void` (evicts `PROCESSING` key on early 4xx validation errors).
+  - `IdempotencyService.releaseLock(String key): void` (evicts `PROCESSING` key on failures).
   - `IdempotencyService.saveReceipt(String key, Object receiptPayload, Duration ttl): void`.
   - `IdempotencyService.getReceipt(String key, Class<T> clazz): Optional<T>`.
 
 - [ ] **Step 1: Write failing test in `IdempotencyServiceTest`**
+  - Verify key formatting includes `senderUserId`.
   - Verify first `acquireLock` returns `true`.
   - Verify second concurrent `acquireLock` returns `false` or throws `IdempotencyConflictException`.
   - Verify `releaseLock` enables re-acquisition.
@@ -313,12 +333,12 @@ d:/Project_Java/e-wallet-project/
 - [ ] **Step 4: Commit**
   ```bash
   git add src/main/java/com/meme/vwallet/config/RedisConfig.java src/main/java/com/meme/vwallet/service/IdempotencyService.java src/test/
-  git commit -m "feat: implement redis idempotency service with lock acquisition and receipt caching"
+  git commit -m "feat: implement redis idempotency service with namespaced keys and receipt caching"
   ```
 
 ---
 
-### Task 6: P2P Money Transfer Service & Controller (Deadlock-Free Concurrency)
+### Task 6: P2P Money Transfer Service & Controller (Deadlock-Free Concurrency & Transaction Boundary Separation)
 
 **Files:**
 - Create: `ewallet-backend/src/main/java/com/meme/vwallet/dto/request/TransferRequest.java`
@@ -333,7 +353,9 @@ d:/Project_Java/e-wallet-project/
 - Consumes: Task 2 (`WalletRepository`, `TransactionRepository`), Task 3 (`UserService`), Task 4 (`LedgerService`), Task 5 (`IdempotencyService`)
 - Produces:
   - `POST /api/v1/transfers` endpoint.
-  - `TransferService.transfer(Long senderUserId, String idempotencyKey, TransferRequest request): TransferResponse`.
+  - `TransferService.transfer(Long senderUserId, String idempotencyKey, TransferRequest request): TransferResponse` (outer non-transactional orchestration).
+  - `TransferService.executeTransferTx(Long senderUserId, TransferRequest request): TransferResponse` (inner `@Transactional` boundary).
+  - Self-transfer prevention: `if (senderWallet.getId().equals(receiverWallet.getId())) throw new WalletException(...)`.
   - Deterministic locking:
     ```java
     Long firstId = Math.min(senderWallet.getId(), receiverWallet.getId());
@@ -344,19 +366,27 @@ d:/Project_Java/e-wallet-project/
 
 - [ ] **Step 1: Write unit tests in `TransferServiceTest`**
   - Test 1: Successful transfer debits sender, credits receiver, creates 2 ledger entries, records completed transaction, caches response in Redis.
-  - Test 2: Invalid PIN throws `InvalidPinException` and calls `idempotencyService.releaseLock(key)`.
-  - Test 3: Insufficient balance throws `InsufficientBalanceException` and calls `idempotencyService.releaseLock(key)`.
-  - Test 4: Existing `COMPLETED` idempotency key directly returns cached receipt without hitting DB.
+  - Test 2: Self-transfer attempt (`senderWallet.getId().equals(receiverWallet.getId())`) throws `WalletException` before lock acquisition.
+  - Test 3: Invalid PIN throws `InvalidPinException` and releases idempotency lock.
+  - Test 4: Insufficient balance throws `InsufficientBalanceException` and releases idempotency lock.
+  - Test 5: Existing `COMPLETED` idempotency key directly returns cached receipt without hitting DB.
   - Run: `mvn test -Dtest=TransferServiceTest`
   - Expected: FAIL.
 
 - [ ] **Step 2: Implement `TransferService` & `TransferController`**
-  - Implement full workflow according to Spec Section 5.1.1.
-  - Ensure `@Transactional` wraps lock acquisition, wallet updates, transaction record, and ledger entries.
-  - Handle early validation failures by releasing the idempotency lock.
+  - Separate outer orchestration from inner transactional execution:
+    1. Outer `transfer(...)`: check `getReceipt(key)`, acquire `acquireLock(key)`.
+    2. Try `executeTransferTx(...)` (`@Transactional`).
+    3. Post-commit: `saveReceipt(key, response, Duration.ofHours(24))`.
+    4. Catch `Exception`: `releaseLock(key)` and rethrow.
+  - In `executeTransferTx`:
+    1. Validate self-transfer.
+    2. Verify PIN.
+    3. Deterministic `min/max` lock acquisition.
+    4. Validate balance & update wallets + insert transaction + insert 2 ledger entries.
 
 - [ ] **Step 3: Implement `GlobalExceptionHandler`**
-  - Map `InvalidPinException` $\rightarrow$ 400 Bad Request.
+  - Map `WalletException` & `InvalidPinException` $\rightarrow$ 400 Bad Request.
   - Map `InsufficientBalanceException` $\rightarrow$ 400 Bad Request.
   - Map `IdempotencyConflictException` $\rightarrow$ 409 Conflict.
   - Standardize error JSON format: `{"timestamp": "...", "status": 400, "error": "...", "message": "..."}`.
@@ -368,7 +398,7 @@ d:/Project_Java/e-wallet-project/
 - [ ] **Step 5: Commit**
   ```bash
   git add src/main/java/com/meme/vwallet/dto/ src/main/java/com/meme/vwallet/service/TransferService.java src/main/java/com/meme/vwallet/controller/TransferController.java src/main/java/com/meme/vwallet/exception/GlobalExceptionHandler.java src/test/
-  git commit -m "feat: implement p2p transfer service with deterministic locking and idempotency gate"
+  git commit -m "feat: implement p2p transfer service with self-transfer check and separated transaction boundaries"
   ```
 
 ---
@@ -407,15 +437,22 @@ d:/Project_Java/e-wallet-project/
 
 - [ ] **Step 3: Write tests in `PaymentServiceTest`**
   - Test 1: Phase 1 creates `PENDING` top-up transaction with `SYSTEM_WALLET` as sender.
-  - Test 2: Phase 2 Webhook with valid signature and `ResponseCode=00` transitions transaction to `COMPLETED`, locks wallets, debits System Wallet, credits User Wallet, and logs ledger entries.
-  - Test 3: Phase 2 Webhook with invalid signature returns `RspCode: 97`.
-  - Test 4: Replayed Webhook on already completed transaction returns `RspCode: 00` without modifying balance.
+  - Test 2: Phase 2 Webhook with invalid signature returns `RspCode: 97`.
+  - Test 3: Phase 2 Webhook with unknown `vnp_TxnRef` returns `RspCode: 01`.
+  - Test 4: Phase 2 Webhook with mismatched amount (`vnp_Amount / 100 != tx.amount`) marks transaction `FAILED` and returns `RspCode: 04`.
+  - Test 5: Replayed Webhook on already completed transaction returns `RspCode: 00` without modifying balance or creating duplicate ledger entries.
+  - Test 6: Valid Webhook with `ResponseCode=00` transitions transaction to `COMPLETED`, locks wallets, debits System Wallet, credits User Wallet, logs ledger entries, and returns `RspCode: 00`.
   - Run: `mvn test -Dtest=PaymentServiceTest`
   - Expected: FAIL.
 
 - [ ] **Step 4: Implement `PaymentService`, `PaymentController`, and `WalletController`**
-  - Implement Phase 1 and Phase 2 according to Spec Section 5.2.
-  - Add query endpoints `GET /api/v1/transactions/{id}` and `GET /api/v1/wallets/me`.
+  - Implement 5 sequential checks in `processWebhook(...)`:
+    1. Signature check via `vnpayService.verifySignature` (`97` on failure).
+    2. Lock transaction: `transactionRepository.findByIdForUpdate(txId)` (`01` if not found).
+    3. Idempotent status check: if `COMPLETED` return `00` immediately.
+    4. Amount check: `Long.parseLong(params.get("vnp_Amount")) / 100 == tx.getAmount()` (`04` on mismatch).
+    5. Lock `SYSTEM_WALLET` & `userWallet` (`min/max` order), mutate balances, insert 2 `LedgerEntry` records, update status `COMPLETED`, commit, return `00`.
+  - Add query endpoints `GET /api/v1/payments/vnpay-return`, `GET /api/v1/transactions/{id}`, and `GET /api/v1/wallets/me`.
 
 - [ ] **Step 5: Run tests to verify they pass**
   - Run: `mvn test -Dtest=VnpayServiceTest,PaymentServiceTest`
