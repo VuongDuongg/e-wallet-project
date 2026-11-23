@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,13 +28,43 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidPinException.class)
     public ResponseEntity<ErrorResponse> handleInvalidPinException(InvalidPinException ex) {
         log.warn("InvalidPinException: {}", ex.getMessage());
-        return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "INVALID_PIN", ex.getMessage());
     }
 
-    @ExceptionHandler(InsufficientBalanceException.class)
-    public ResponseEntity<ErrorResponse> handleInsufficientBalanceException(InsufficientBalanceException ex) {
-        log.warn("InsufficientBalanceException: {}", ex.getMessage());
-        return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+    @ExceptionHandler(PinNotSetException.class)
+    public ResponseEntity<ErrorResponse> handlePinNotSetException(PinNotSetException ex) {
+        log.warn("PinNotSetException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "PIN_NOT_SET", ex.getMessage());
+    }
+
+    @ExceptionHandler(PinAlreadySetException.class)
+    public ResponseEntity<ErrorResponse> handlePinAlreadySetException(PinAlreadySetException ex) {
+        log.warn("PinAlreadySetException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "PIN_ALREADY_SET", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidTokenTypeException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidTokenTypeException(InvalidTokenTypeException ex) {
+        log.warn("InvalidTokenTypeException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN_TYPE", ex.getMessage());
+    }
+
+    @ExceptionHandler(TokenReuseException.class)
+    public ResponseEntity<ErrorResponse> handleTokenReuseException(TokenReuseException ex) {
+        log.warn("TokenReuseException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.UNAUTHORIZED, "TOKEN_REUSE_DETECTED", ex.getMessage());
+    }
+
+    @ExceptionHandler(BadCredentialsException.class)
+    public ResponseEntity<ErrorResponse> handleBadCredentialsException(BadCredentialsException ex) {
+        log.warn("BadCredentialsException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.UNAUTHORIZED, "BAD_CREDENTIALS", "Số điện thoại hoặc mật khẩu không chính xác");
+    }
+
+    @ExceptionHandler(UserLockedException.class)
+    public ResponseEntity<ErrorResponse> handleUserLockedException(UserLockedException ex) {
+        log.warn("UserLockedException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.FORBIDDEN, "USER_LOCKED", ex.getMessage());
     }
 
     @ExceptionHandler(UserNotFoundException.class)
@@ -42,10 +73,28 @@ public class GlobalExceptionHandler {
         return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
+    @ExceptionHandler(UserAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponse> handleUserAlreadyExistsException(UserAlreadyExistsException ex) {
+        log.warn("UserAlreadyExistsException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "USER_ALREADY_EXISTS", ex.getMessage());
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ErrorResponse> handleConflictException(ConflictException ex) {
+        log.warn("ConflictException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage());
+    }
+
     @ExceptionHandler(IdempotencyConflictException.class)
     public ResponseEntity<ErrorResponse> handleIdempotencyConflictException(IdempotencyConflictException ex) {
         log.warn("IdempotencyConflictException: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(InsufficientBalanceException.class)
+    public ResponseEntity<ErrorResponse> handleInsufficientBalanceException(InsufficientBalanceException ex) {
+        log.warn("InsufficientBalanceException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -81,10 +130,16 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<ErrorResponse> buildErrorResponse(HttpStatus status, String message) {
+        return buildErrorResponse(status, null, message);
+    }
+
+    private ResponseEntity<ErrorResponse> buildErrorResponse(HttpStatus status, String code, String message) {
         ErrorResponse body = ErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(status.value())
                 .error(status.getReasonPhrase())
+                .code(code)
+                .errorCode(code)
                 .message(message)
                 .build();
         return ResponseEntity.status(status).body(body);
