@@ -7,6 +7,7 @@ import com.meme.vwallet.exception.GlobalExceptionHandler;
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.InsufficientBalanceException;
 import com.meme.vwallet.exception.InvalidPinException;
+import com.meme.vwallet.exception.PinNotSetException;
 import com.meme.vwallet.exception.UserNotFoundException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
@@ -220,6 +221,22 @@ class TransferControllerTest {
                     .andExpect(jsonPath("$.status", is(400)))
                     .andExpect(jsonPath("$.error", is("Bad Request")))
                     .andExpect(jsonPath("$.message", is("Invalid PIN")));
+        }
+
+        @Test
+        @DisplayName("should return 400 BAD REQUEST with PIN_NOT_SET when PinNotSetException is thrown")
+        void transfer_pinNotSetException_returns400() throws Exception {
+            when(transferService.transfer(eq(1L), eq("req-idemp-123"), any(TransferRequest.class)))
+                    .thenThrow(new PinNotSetException("Người dùng chưa thiết lập mã PIN giao dịch"));
+
+            mockMvc.perform(post("/api/v1/transfers")
+                            .header("Idempotency-Key", "req-idemp-123")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(validRequest)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status", is(400)))
+                    .andExpect(jsonPath("$.code", is("PIN_NOT_SET")))
+                    .andExpect(jsonPath("$.message", is("Người dùng chưa thiết lập mã PIN giao dịch")));
         }
 
         @Test
