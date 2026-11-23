@@ -21,7 +21,7 @@ public class UserService {
     @Transactional(readOnly = true)
     public void verifyPin(Long userId, String rawPin) {
         User user = findById(userId);
-        if (user.getPinHash() == null || user.getPinHash().isBlank()) {
+        if (!user.hasPin()) {
             throw new PinNotSetException("Tài khoản chưa cài đặt mã PIN giao dịch. Vui lòng thiết lập mã PIN trước khi thực hiện giao dịch.");
         }
         if (rawPin == null || !passwordEncoder.matches(rawPin, user.getPinHash())) {
@@ -38,7 +38,7 @@ public class UserService {
     @Transactional
     public void setInitialPin(Long userId, String pin) {
         User user = findById(userId);
-        if (user.getPinHash() != null && !user.getPinHash().isBlank()) {
+        if (user.hasPin()) {
             throw new PinAlreadySetException("Mã PIN giao dịch đã được thiết lập. Không thể cài đặt lại tại endpoint này.");
         }
         setPinInternal(user, pin);

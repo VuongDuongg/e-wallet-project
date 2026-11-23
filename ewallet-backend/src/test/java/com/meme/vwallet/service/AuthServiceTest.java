@@ -299,8 +299,12 @@ class AuthServiceTest {
             when(valueOperations.get("auth:rotated:" + oldTokenId)).thenReturn(null);
 
             // Acquire lock -> success
-            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), eq("LOCKED"), eq(Duration.ofSeconds(5))))
-                    .thenReturn(true);
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
+                    .thenAnswer(inv -> {
+                        String token = inv.getArgument(1);
+                        when(valueOperations.get("auth:refresh_lock:1")).thenReturn(token);
+                        return true;
+                    });
 
             // Double check rotated cache inside lock -> miss
             // (Mock returns null for "auth:rotated:old-token-id-123")
@@ -379,10 +383,14 @@ class AuthServiceTest {
             when(jwtTokenProvider.getJtiFromToken(validRefreshToken)).thenReturn(oldTokenId);
 
             when(valueOperations.get("auth:rotated:" + oldTokenId)).thenReturn(null);
-            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), eq("LOCKED"), eq(Duration.ofSeconds(5))))
-                    .thenReturn(true);
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
+                    .thenAnswer(inv -> {
+                        String token = inv.getArgument(1);
+                        when(valueOperations.get("auth:refresh_lock:1")).thenReturn(token);
+                        return true;
+                    });
 
-            User user = User.builder().id(1L).phoneNumber("0901234567").status("ACTIVE").build();
+            User user = User.builder().id(1L).phoneNumber("0901234567").fullName("Nguyen Van A").status("ACTIVE").build();
             when(userRepository.findById(1L)).thenReturn(Optional.of(user));
 
             // Active token in Redis differs from current request tokenId -> reuse/breach!
@@ -411,7 +419,7 @@ class AuthServiceTest {
             // Fast-check miss
             when(valueOperations.get("auth:rotated:" + oldTokenId)).thenReturn(null);
             // Lock failure
-            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), eq("LOCKED"), eq(Duration.ofSeconds(5))))
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
                     .thenReturn(false);
 
             assertThatThrownBy(() -> authService.refreshToken(request))
@@ -446,7 +454,7 @@ class AuthServiceTest {
                     .thenReturn(null)
                     .thenReturn(cachedJson);
 
-            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), eq("LOCKED"), eq(Duration.ofSeconds(5))))
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
                     .thenReturn(false);
 
             AuthResponse response = authService.refreshToken(request);
@@ -467,8 +475,12 @@ class AuthServiceTest {
             when(jwtTokenProvider.getJtiFromToken(validRefreshToken)).thenReturn(oldTokenId);
 
             when(valueOperations.get("auth:rotated:" + oldTokenId)).thenReturn(null);
-            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), eq("LOCKED"), eq(Duration.ofSeconds(5))))
-                    .thenReturn(true);
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
+                    .thenAnswer(inv -> {
+                        String token = inv.getArgument(1);
+                        when(valueOperations.get("auth:refresh_lock:1")).thenReturn(token);
+                        return true;
+                    });
 
             User user = User.builder().id(1L).phoneNumber("0901234567").status("LOCKED").build();
             when(userRepository.findById(1L)).thenReturn(Optional.of(user));
@@ -478,6 +490,36 @@ class AuthServiceTest {
                     .hasMessageContaining("Tài khoản của bạn đã bị khóa");
 
             verify(redisTemplate).delete("auth:refresh_lock:1");
+        }
+
+        @Test
+        @DisplayName("refreshToken - Lock expired and taken by another process: does not release lock")
+        void refreshToken_lockExpired_doesNotReleaseOtherProcessLock() {
+            RefreshTokenRequest request = new RefreshTokenRequest(validRefreshToken);
+
+            when(jwtTokenProvider.validateToken(validRefreshToken)).thenReturn(true);
+            when(jwtTokenProvider.getTokenType(validRefreshToken)).thenReturn(JwtTokenProvider.TOKEN_TYPE_REFRESH);
+            when(jwtTokenProvider.getUserIdFromToken(validRefreshToken)).thenReturn(1L);
+            when(jwtTokenProvider.getJtiFromToken(validRefreshToken)).thenReturn(oldTokenId);
+
+            when(valueOperations.get("auth:rotated:" + oldTokenId)).thenReturn(null);
+            when(valueOperations.setIfAbsent(eq("auth:refresh_lock:1"), anyString(), eq(Duration.ofSeconds(5))))
+                    .thenReturn(true);
+
+            User user = User.builder().id(1L).phoneNumber("0901234567").fullName("Nguyen Van A").status("ACTIVE").build();
+            when(userRepository.findById(1L)).thenReturn(Optional.of(user));
+            when(valueOperations.get("auth:refresh:1")).thenReturn(oldTokenId);
+
+            when(jwtTokenProvider.generateAccessToken(1L, "0901234567", "Nguyen Van A")).thenReturn("new-access-token");
+            when(jwtTokenProvider.generateRefreshToken(eq(1L), anyString())).thenReturn("new-refresh-token");
+
+            // Lock expired during processing; another worker took the lock with another token
+            when(valueOperations.get("auth:refresh_lock:1")).thenReturn("different-process-lock-token");
+
+            AuthResponse response = authService.refreshToken(request);
+
+            assertThat(response).isNotNull();
+            verify(redisTemplate, never()).delete("auth:refresh_lock:1");
         }
 
         @Test

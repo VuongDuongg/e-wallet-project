@@ -68,6 +68,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 path = path.substring(contextPath.length());
             }
         }
+        if (path == null) {
+            return false;
+        }
         for (String pattern : EXCLUDE_PATTERNS) {
             if (pathMatcher.match(pattern, path)) {
                 return true;

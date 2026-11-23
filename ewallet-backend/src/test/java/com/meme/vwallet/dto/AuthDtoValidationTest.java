@@ -80,12 +80,40 @@ class AuthDtoValidationTest {
             RegisterRequest req = RegisterRequest.builder()
                     .phoneNumber("0912345678")
                     .fullName("Nguyen Van A")
-                    .password("1234567")
+                    .password("Pass123")
                     .build();
 
             Set<ConstraintViolation<RegisterRequest>> violations = validator.validate(req);
             assertThat(violations).hasSize(1);
             assertThat(violations.iterator().next().getMessage()).contains("8");
+        }
+
+        @Test
+        @DisplayName("password without letter should fail")
+        void passwordWithoutLetter_shouldFail() {
+            RegisterRequest req = RegisterRequest.builder()
+                    .phoneNumber("0912345678")
+                    .fullName("Nguyen Van A")
+                    .password("12345678")
+                    .build();
+
+            Set<ConstraintViolation<RegisterRequest>> violations = validator.validate(req);
+            assertThat(violations).hasSize(1);
+            assertThat(violations.iterator().next().getMessage()).contains("chữ cái");
+        }
+
+        @Test
+        @DisplayName("password without digit should fail")
+        void passwordWithoutDigit_shouldFail() {
+            RegisterRequest req = RegisterRequest.builder()
+                    .phoneNumber("0912345678")
+                    .fullName("Nguyen Van A")
+                    .password("PasswordOnly")
+                    .build();
+
+            Set<ConstraintViolation<RegisterRequest>> violations = validator.validate(req);
+            assertThat(violations).hasSize(1);
+            assertThat(violations.iterator().next().getMessage()).contains("chữ số");
         }
 
         @Test

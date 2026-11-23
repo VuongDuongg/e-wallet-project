@@ -45,13 +45,12 @@ public class UserController {
     @GetMapping("/me")
     public ResponseEntity<UserMeResponse> getCurrentUser(@CurrentUser Long userId) {
         User user = userService.findById(userId);
-        boolean hasPin = user.getPinHash() != null && !user.getPinHash().isBlank();
 
         UserMeResponse response = UserMeResponse.builder()
                 .userId(user.getId())
                 .phoneNumber(user.getPhoneNumber())
                 .fullName(user.getFullName())
-                .hasPin(hasPin)
+                .hasPin(user.hasPin())
                 .status(user.getStatus())
                 .createdAt(user.getCreatedAt())
                 .build();

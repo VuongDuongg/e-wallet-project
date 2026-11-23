@@ -107,6 +107,17 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
+    @DisplayName("shouldNotFilter should return false when path is null")
+    void shouldNotFilter_nullPath_shouldReturnFalse() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "");
+        request.setServletPath(null);
+        request.setPathInfo(null);
+        request.setRequestURI(null);
+
+        assertThat(filter.shouldNotFilter(request)).isFalse();
+    }
+
+    @Test
     @DisplayName("doFilterInternal should proceed down filter chain when Authorization header is missing")
     void doFilterInternal_whenAuthorizationHeaderMissing_shouldProceedWithoutAuthentication() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/transfers");

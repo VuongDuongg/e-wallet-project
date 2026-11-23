@@ -104,7 +104,7 @@ public class AuthService {
                 .userId(user.getId())
                 .phoneNumber(user.getPhoneNumber())
                 .fullName(user.getFullName())
-                .hasPin(user.getPinHash() != null)
+                .hasPin(user.hasPin())
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
                 .tokenType("Bearer")
@@ -144,7 +144,7 @@ public class AuthService {
                 .userId(user.getId())
                 .phoneNumber(user.getPhoneNumber())
                 .fullName(user.getFullName())
-                .hasPin(user.getPinHash() != null)
+                .hasPin(user.hasPin())
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
                 .tokenType("Bearer")
@@ -181,7 +181,8 @@ public class AuthService {
         }
 
         String lockKey = "auth:refresh_lock:" + userId;
-        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(lockKey, "LOCKED", Duration.ofSeconds(5));
+        String lockToken = UUID.randomUUID().toString();
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(lockKey, lockToken, Duration.ofSeconds(5));
         boolean lockAcquired = Boolean.TRUE.equals(acquired);
 
         if (!lockAcquired) {
@@ -237,7 +238,7 @@ public class AuthService {
                     .userId(user.getId())
                     .phoneNumber(user.getPhoneNumber())
                     .fullName(user.getFullName())
-                    .hasPin(user.getPinHash() != null)
+                    .hasPin(user.hasPin())
                     .accessToken(newAccessToken)
                     .refreshToken(newRefreshToken)
                     .tokenType("Bearer")
@@ -265,7 +266,10 @@ public class AuthService {
 
             return authResponse;
         } finally {
-            redisTemplate.delete(lockKey);
+            Object currentLock = redisTemplate.opsForValue().get(lockKey);
+            if (lockToken.equals(currentLock)) {
+                redisTemplate.delete(lockKey);
+            }
         }
     }
 
