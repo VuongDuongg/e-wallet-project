@@ -10,8 +10,8 @@ import com.meme.vwallet.exception.InvalidPinException;
 import com.meme.vwallet.exception.UserNotFoundException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
-import com.meme.vwallet.security.UserPrincipal;
 import com.meme.vwallet.service.TransferService;
+import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,8 +22,6 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;
@@ -62,16 +60,7 @@ class TransferControllerTest {
                 .setCustomArgumentResolvers(new CurrentUserArgumentResolver())
                 .build();
 
-        UserPrincipal principal = new UserPrincipal(
-                1L,
-                "0901234567",
-                "Nguyen Van A",
-                "test-jti",
-                Instant.now().plusSeconds(3600)
-        );
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities())
-        );
+        SecurityTestUtils.setAuthenticatedUser(1L, "0901234567", "Nguyen Van A");
 
         validRequest = TransferRequest.builder()
                 .receiverPhone("0907654321")
@@ -83,7 +72,7 @@ class TransferControllerTest {
 
     @AfterEach
     void tearDown() {
-        SecurityContextHolder.clearContext();
+        SecurityTestUtils.clearSecurityContext();
     }
 
     @Nested
@@ -108,7 +97,6 @@ class TransferControllerTest {
                     .thenReturn(response);
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -128,9 +116,9 @@ class TransferControllerTest {
     class ValidationAndHeaderErrors {
 
         @Test
-        @DisplayName("should return 401 UNAUTHORIZED when X-User-Id header is missing")
+        @DisplayName("should return 401 UNAUTHORIZED when authentication is missing")
         void transfer_missingUserIdHeader_returns401() throws Exception {
-            SecurityContextHolder.clearContext();
+            SecurityTestUtils.clearSecurityContext();
             mockMvc.perform(post("/api/v1/transfers")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
@@ -145,7 +133,6 @@ class TransferControllerTest {
         @DisplayName("should return 400 BAD REQUEST when Idempotency-Key header is missing")
         void transfer_missingIdempotencyKeyHeader_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
                     .andExpect(status().isBadRequest())
@@ -159,7 +146,6 @@ class TransferControllerTest {
             validRequest.setAmount(-50_000L);
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -175,7 +161,6 @@ class TransferControllerTest {
             validRequest.setReceiverPhone("");
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -191,7 +176,6 @@ class TransferControllerTest {
             validRequest.setPin("");
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -213,7 +197,6 @@ class TransferControllerTest {
                     .thenThrow(new WalletException("Không thể tự chuyển tiền cho chính mình"));
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -230,7 +213,6 @@ class TransferControllerTest {
                     .thenThrow(new InvalidPinException("Invalid PIN"));
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -247,7 +229,6 @@ class TransferControllerTest {
                     .thenThrow(new InsufficientBalanceException("Số dư không đủ để thực hiện giao dịch"));
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -264,7 +245,6 @@ class TransferControllerTest {
                     .thenThrow(new UserNotFoundException("User not found with phone number: 0907654321"));
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))
@@ -281,7 +261,6 @@ class TransferControllerTest {
                     .thenThrow(new IdempotencyConflictException("Giao dịch đang được xử lý, vui lòng không gửi lại yêu cầu"));
 
             mockMvc.perform(post("/api/v1/transfers")
-                            .header("X-User-Id", "1")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(validRequest)))

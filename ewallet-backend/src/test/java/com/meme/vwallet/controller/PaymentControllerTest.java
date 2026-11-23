@@ -10,8 +10,8 @@ import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.entity.enums.WalletStatus;
 import com.meme.vwallet.exception.GlobalExceptionHandler;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
-import com.meme.vwallet.security.UserPrincipal;
 import com.meme.vwallet.service.PaymentService;
+import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,8 +23,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.server.ResponseStatusException;
@@ -32,7 +30,6 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.is;
@@ -68,21 +65,12 @@ class PaymentControllerTest {
                 .setCustomArgumentResolvers(new CurrentUserArgumentResolver())
                 .build();
 
-        UserPrincipal principal = new UserPrincipal(
-                2L,
-                "0901234567",
-                "Nguyen Van A",
-                "test-jti",
-                Instant.now().plusSeconds(3600)
-        );
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities())
-        );
+        SecurityTestUtils.setAuthenticatedUser(2L, "0901234567", "Nguyen Van A");
     }
 
     @AfterEach
     void tearDown() {
-        SecurityContextHolder.clearContext();
+        SecurityTestUtils.clearSecurityContext();
     }
 
     @Nested
@@ -105,7 +93,6 @@ class PaymentControllerTest {
                     .thenReturn(response);
 
             mockMvc.perform(post("/api/v1/payments/topup")
-                            .header("X-User-Id", "2")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isOk())
@@ -114,9 +101,9 @@ class PaymentControllerTest {
         }
 
         @Test
-        @DisplayName("Should return 401 when X-User-Id header is missing")
+        @DisplayName("Should return 401 when authentication is missing")
         void shouldReturn401WhenUserIdHeaderMissing() throws Exception {
-            SecurityContextHolder.clearContext();
+            SecurityTestUtils.clearSecurityContext();
             TopupRequest request = TopupRequest.builder().amount(100000L).build();
 
             mockMvc.perform(post("/api/v1/payments/topup")
@@ -131,7 +118,6 @@ class PaymentControllerTest {
             TopupRequest request = TopupRequest.builder().amount(-500L).build();
 
             mockMvc.perform(post("/api/v1/payments/topup")
-                            .header("X-User-Id", "2")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isBadRequest());
@@ -203,7 +189,7 @@ class PaymentControllerTest {
                     .createdAt(Instant.now())
                     .build();
 
-            when(paymentService.getTransactionStatus(any(), eq(2002L))).thenReturn(response);
+            when(paymentService.getTransactionStatus(eq(2L), eq(2002L))).thenReturn(response);
 
             mockMvc.perform(get("/api/v1/transactions/2002"))
                     .andExpect(status().isOk())
@@ -213,9 +199,18 @@ class PaymentControllerTest {
         }
 
         @Test
+        @DisplayName("Should return 401 when not authenticated")
+        void shouldReturn401WhenUnauthenticated() throws Exception {
+            SecurityTestUtils.clearSecurityContext();
+
+            mockMvc.perform(get("/api/v1/transactions/2002"))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
         @DisplayName("Should return 404 when transaction does not exist")
         void shouldReturn404WhenTransactionNotFound() throws Exception {
-            when(paymentService.getTransactionStatus(any(), eq(9999L)))
+            when(paymentService.getTransactionStatus(eq(2L), eq(9999L)))
                     .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy giao dịch"));
 
             mockMvc.perform(get("/api/v1/transactions/9999"))
@@ -242,8 +237,7 @@ class PaymentControllerTest {
 
             when(paymentService.getWalletBalance(2L)).thenReturn(response);
 
-            mockMvc.perform(get("/api/v1/wallets/me")
-                            .header("X-User-Id", "2"))
+            mockMvc.perform(get("/api/v1/wallets/me"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.walletId", is(2)))
                     .andExpect(jsonPath("$.userId", is(2)))
@@ -252,9 +246,9 @@ class PaymentControllerTest {
         }
 
         @Test
-        @DisplayName("Should return 401 when X-User-Id is missing")
+        @DisplayName("Should return 401 when not authenticated")
         void shouldReturn401WhenHeaderMissing() throws Exception {
-            SecurityContextHolder.clearContext();
+            SecurityTestUtils.clearSecurityContext();
             mockMvc.perform(get("/api/v1/wallets/me"))
                     .andExpect(status().isUnauthorized());
         }
