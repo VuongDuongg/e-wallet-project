@@ -22,17 +22,18 @@ In a production environment, relying on an unauthenticated client-supplied heade
 1. **User Registration (`POST /api/v1/auth/register`):**
    - Accept phone number, full name, and password.
    - Enforce phone number canonicalization (normalize `+84...` to `0...` standard 10-digit domestic format) and password complexity.
-   - Automatically initialize a default wallet for the new user with `balance = 0` and status `ACTIVE`.
+   - Automatically initialize a default wallet for the new user with `balance = 0`, `currency = 'VND'`, `version = 0`, and status `ACTIVE`.
 2. **User Login (`POST /api/v1/auth/login`):**
+   - Apply phone number canonicalization (`+84...` to `0...`) before lookup.
    - Authenticate credentials via `BCryptPasswordEncoder`.
    - Issue a short-lived **Access Token** (TTL: 15 minutes) and a long-lived **Refresh Token** (TTL: 7 days).
    - Return user metadata including `hasPin` (boolean) to notify clients whether PIN setup is required.
 3. **Refresh Token Lifecycle & Rotation (`POST /api/v1/auth/refresh`):**
-   - Store active refresh tokens in Redis under `auth:refresh:{userId}:{tokenId}` with a 7-day TTL.
-   - Enforce **Refresh Token Rotation (RTR)**: when a valid refresh token is exchanged, it is immediately deleted, and a newly generated pair (Access Token + new Refresh Token) is issued.
-   - Detect refresh token reuse: if an invalidated or non-existent token is submitted, revoke active sessions for that user.
+   - Store active refresh tokens in Redis under `auth:refresh:{userId}` (holding active `tokenId`) with a 7-day TTL.
+   - Enforce **Refresh Token Rotation (RTR)**: when a valid refresh token is exchanged, it is immediately rotated, and a newly generated pair (Access Token + new Refresh Token) is issued.
+   - Detect refresh token reuse: if an invalidated or non-existent token is submitted after the grace period, revoke active sessions for that user.
 4. **Immediate Logout & Invalidation (`POST /api/v1/auth/logout`):**
-   - Evict the user's refresh token from Redis.
+   - Evict the user's refresh token from Redis (`DEL auth:refresh:{userId}`).
    - Extract the Access Token's `jti` (JWT ID) and write an entry `auth:blacklist:{jti}` to Redis with a TTL equal to the token's remaining lifetime, ensuring immediate revocation across all microservice instances before natural JWT expiration.
 5. **Post-Login Transaction PIN Setup (`POST /api/v1/users/pin`):**
    - Allow users to set their 6-digit transaction PIN after registration if `hasPin == false`.
@@ -41,11 +42,11 @@ In a production environment, relying on an unauthenticated client-supplied heade
      - `PIN_NOT_SET` (HTTP 400): user attempts a transfer but has never configured a PIN.
      - `INVALID_PIN` (HTTP 400/401): user has configured a PIN but provided an incorrect one.
 6. **Stateless Security Filter Chain & `@CurrentUser` Resolver Migration:**
-   - Implement `JwtAuthenticationFilter` (`OncePerRequestFilter`) to validate `Bearer <token>`, verify signature/expiration, and ensure `jti` is not blacklisted in Redis.
-   - Update `CurrentUserArgumentResolver` to extract the authenticated `userId` directly from `SecurityContextHolder` instead of reading the `X-User-Id` header.
+   - Implement `JwtAuthenticationFilter` (`OncePerRequestFilter`) to validate `Bearer <token>`, verify signature/expiration, enforce token claim `type == "ACCESS"`, and ensure `jti` is not blacklisted in Redis.
+   - Update `CurrentUserArgumentResolver` to extract the authenticated `userId` strictly from `SecurityContextHolder`. Remove all fallback `X-User-Id` header parsing to eliminate identity spoofing vulnerabilities.
    - Whitelist public endpoints:
      - Public: `/api/v1/auth/register`, `/api/v1/auth/login`, `/api/v1/auth/refresh`, `/api/v1/payments/webhook`, `/api/v1/payments/vnpay-return`, Swagger/OpenAPI docs, Actuator health.
-     - Authenticated: `/api/v1/auth/logout`, `/api/v1/users/**`, `/api/v1/transfers/**`, `/api/v1/wallets/**`, `/api/v1/payments/topup`, and transaction details (with wallet ownership verification).
+     - Authenticated: `/api/v1/auth/logout`, `/api/v1/users/**`, `/api/v1/transfers/**`, `/api/v1/wallets/**`, `/api/v1/payments/topup`, and transaction details (enforcing IDOR protection via sender/receiver wallet ownership verification).
 
 ### 2.2. Non-Goals
 - OAuth2 / Social Login (Google, Apple, Facebook) — deferred to Phase D.
@@ -93,8 +94,8 @@ CREATE TABLE IF NOT EXISTS users (
 *Note:* No schema migration required for `users`. Column `pin_hash` is already nullable.
 When a user registers, a record is also inserted into `wallets`:
 ```sql
-INSERT INTO wallets (user_id, balance, status, created_at, updated_at)
-VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+INSERT INTO wallets (user_id, balance, currency, status, version, created_at, updated_at)
+VALUES (:userId, 0, 'VND', 'ACTIVE', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 ```
 
 ### 4.2. Redis Key Namespace Specifications
@@ -102,21 +103,24 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 | Redis Key Pattern | Type | Value Payload | TTL | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
 | `auth:refresh:{userId}` | String | Active `tokenId` (UUID) | 7 days (604,800s) | Tracks currently active refresh token for the user (Single-Device session model) |
-| `auth:rotated:{oldTokenId}` | String | Serialized `AuthResponse` JSON | 30 seconds | RTR Grace Period: allows parallel concurrent mobile requests to receive the new pair safely without breach lockout |
+| `auth:refresh_lock:{userId}` | String | `"LOCKED"` | 5 seconds | Distributed short lock preventing race condition lockouts during parallel mobile refreshes |
+| `auth:rotated:{oldTokenId}` | String | Serialized `AuthResponse` JSON | Configurable (Default 30s) | RTR Grace Period: allows parallel concurrent mobile requests to receive the new pair safely without breach lockout |
 | `auth:blacklist:{jti}` | String | `"REVOKED"` | Token's remaining lifetime (Max 900s) | Blocks compromised or logged-out Access Tokens immediately |
 
-### 4.3. JWT Structure & Claims
+### 4.3. JWT Structure & Claims (Token Type Confusion Defense)
 
 - **Algorithm:** HMAC-SHA256 (`HS256`) using a 256-bit secret key configured in `application.yaml` (`vwallet.jwt.secret`).
 - **Access Token Claims:**
   - `sub`: `userId` (String, e.g., `"2"`)
   - `phone`: `phoneNumber` (String, e.g., `"0900000001"`)
   - `name`: `fullName`
+  - `type`: `"ACCESS"` (Mandatory: defends against Token Type Confusion attacks)
   - `jti`: Unique UUID string (e.g., `"a3e8...-..."`)
   - `iat`: Issued at timestamp
   - `exp`: Expiration timestamp (iat + 900s / 15 minutes)
 - **Refresh Token Claims:**
   - `sub`: `userId`
+  - `type`: `"REFRESH"` (Mandatory: defends against Token Type Confusion attacks)
   - `jti`: Unique `tokenId` (UUID)
   - `iat`: Issued at timestamp
   - `exp`: Expiration timestamp (iat + 604800s / 7 days)
@@ -137,11 +141,12 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     - `fullName`: Not blank, 2 - 100 characters
     - `password`: Not blank, min 8 chars, at least 1 digit, 1 letter
 - **Processing Logic:**
-  1. Check if `phoneNumber` exists via `userRepository.existsByPhoneNumber(...)`. If exists, throw `UserAlreadyExistsException` (HTTP 409).
-  2. Hash password with `passwordEncoder.encode(password)`.
-  3. Save `User` entity with `status = "ACTIVE"`.
-  4. Create and save new `Wallet` entity for user with `balance = 0` and `status = ACTIVE`.
-  5. Generate Access Token & Refresh Token. Store Refresh Token in Redis.
+  1. Canonicalize `phoneNumber` (normalize `+84...` to `0...`, 10 digits).
+  2. Check if `phoneNumber` exists via `userRepository.existsByPhoneNumber(...)`. If exists, throw `UserAlreadyExistsException` (HTTP 409).
+  3. Hash password with `passwordEncoder.encode(password)`.
+  4. Save `User` entity with `status = "ACTIVE"`.
+  5. Create and save new `Wallet` entity for user with `balance = 0`, `currency = "VND"`, `version = 0`, and `status = ACTIVE`.
+  6. Generate Access Token (`type = "ACCESS"`, TTL 15m) & Refresh Token (`type = "REFRESH"`, TTL 7d). Store active Refresh Token in Redis: `auth:refresh:{userId}` with value `tokenId` (TTL 7d).
 - **Response (HTTP 201 Created):**
   ```json
   {
@@ -165,12 +170,13 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   }
   ```
 - **Processing Logic:**
-  1. Query user by `phoneNumber`. If not found, throw `BadCredentialsException` (HTTP 401).
-  2. Verify password via `passwordEncoder.matches(...)`. If false, throw `BadCredentialsException` (HTTP 401).
-  3. Verify `user.getStatus() == "ACTIVE"`. If inactive, throw `UserLockedException` (HTTP 403).
-  4. Generate Access Token and Refresh Token with unique `jti`.
-  5. Store Refresh Token in Redis: `auth:refresh:{userId}:{tokenId}`.
-  6. Determine `hasPin = (user.getPinHash() != null && !user.getPinHash().isBlank())`.
+  1. Canonicalize `phoneNumber` (normalize `+84...` to `0...`, 10 digits).
+  2. Query user by canonical `phoneNumber`. If not found, throw `BadCredentialsException` (HTTP 401).
+  3. Verify password via `passwordEncoder.matches(...)`. If false, throw `BadCredentialsException` (HTTP 401).
+  4. Verify `user.getStatus() == "ACTIVE"`. If inactive, throw `UserLockedException` (HTTP 403).
+  5. Generate Access Token (`type = "ACCESS"`, TTL 15m) and Refresh Token (`type = "REFRESH"`, TTL 7d) with unique `jti`.
+  6. Store Refresh Token in Redis: `auth:refresh:{userId}` with value `tokenId` (TTL 7d) — automatically invalidating any previous session (Single-Device model).
+  7. Determine `hasPin = (user.getPinHash() != null && !user.getPinHash().isBlank())`.
 - **Response (HTTP 200 OK):**
   ```json
   {
@@ -192,20 +198,27 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     "refreshToken": "eyJhbGciOi..."
   }
   ```
-- **Processing Logic (Refresh Token Rotation with 30s Grace Period):**
+- **Processing Logic (Refresh Token Rotation with 30s Grace Period & Distributed Lock):**
   1. Parse and validate signature and expiry of `refreshToken`. If invalid/expired, return HTTP 401 Unauthorized.
-  2. Extract `userId` and `tokenId` (`jti`) from the refresh token.
-  3. **Check Grace Period Cache:** Check if key `auth:rotated:{tokenId}` exists in Redis:
+  2. Extract `userId`, `tokenId` (`jti`), and `type` claim from the refresh token.
+  3. **Token Type Confusion Defense:** Verify `type == "REFRESH"`. If missing or not `"REFRESH"`, reject immediately with HTTP 401 Unauthorized (`INVALID_TOKEN_TYPE`).
+  4. **Fast-Path (Grace Period Cache):** Check if key `auth:rotated:{tokenId}` exists in Redis:
      - If exists: Return the cached `AuthResponse` directly. (Handles concurrent mobile requests arriving within the 30-second window idempotently).
-  4. **Validate Active Token:** Query Redis key `auth:refresh:{userId}`:
-     - **Case A: Key does not exist or value != `tokenId`** $\rightarrow$ Token Reuse / Security Breach Detected!
-       - Action: Delete `auth:refresh:{userId}` immediately.
-       - Return HTTP 401 Unauthorized with error code `TOKEN_REUSE_DETECTED` and message `"Phát hiện token đã qua sử dụng hoặc phiên đăng nhập không hợp lệ"`.
-     - **Case B: Key exists and value == `tokenId`**:
-       - Generate new Access Token (`jti_new_access`, TTL 15m) and new Refresh Token (`tokenId_new_refresh`, TTL 7d).
-       - Update active token in Redis: `SET auth:refresh:{userId} tokenId_new_refresh EX 604800`.
-       - Cache rotated token for Grace Period: `SET auth:rotated:{tokenId} <serialized_response> EX 30`.
-       - Return new token pair.
+  5. **Concurrency & Race Condition Handling via Short Redis Lock:**
+     - Attempt to acquire short lock: `SET auth:refresh_lock:{userId} "LOCKED" NX EX 5`.
+     - If lock acquisition fails (meaning another concurrent thread for this user is currently rotating the token):
+       - Wait/poll briefly (up to 3 times with 100ms interval) and re-check `auth:rotated:{tokenId}`. If found, return cached response.
+     - Once inside the protected section, perform a secondary check on `auth:rotated:{tokenId}`. If present now, release lock and return cached response.
+     - Query Redis key `auth:refresh:{userId}`:
+       - **Case A: Key does not exist or value != `tokenId`** $\rightarrow$ Token Reuse / Security Breach Detected!
+         - Action: Release lock and delete `auth:refresh:{userId}` immediately.
+         - Return HTTP 401 Unauthorized with error code `TOKEN_REUSE_DETECTED` and message `"Phát hiện token đã qua sử dụng hoặc phiên đăng nhập không hợp lệ"`.
+       - **Case B: Key exists and value == `tokenId`**:
+         - Generate new Access Token (`type = "ACCESS"`, TTL 15m) and new Refresh Token (`type = "REFRESH"`, TTL 7d).
+         - Update active token in Redis: `SET auth:refresh:{userId} tokenId_new_refresh EX 604800`.
+         - Cache rotated token for Grace Period: `SET auth:rotated:{tokenId} <serialized_response> EX <vwallet.jwt.refresh-grace-period-seconds>` (default 30s).
+         - Release lock: `DEL auth:refresh_lock:{userId}`.
+         - Return new token pair.
 - **Response (HTTP 200 OK):**
   ```json
   {
@@ -248,7 +261,8 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 - **Processing Logic:**
   1. Validate `pin.matches("^[0-9]{6}$")` and `pin.equals(confirmPin)`.
   2. Get `userId` from `@CurrentUser`.
-  3. Call `userService.setPin(userId, pin)`.
+  3. Check if user already has a PIN configured: if `user.getPinHash() != null && !user.getPinHash().isBlank()`, throw `PinAlreadySetException("Mã PIN giao dịch đã được thiết lập. Không thể cài đặt lại tại endpoint này.")` (HTTP 400 Bad Request, code `PIN_ALREADY_SET`).
+  4. Call `userService.setPin(userId, pin)`.
 - **Response (HTTP 200 OK):**
   ```json
   {
@@ -270,6 +284,21 @@ VALUES (:userId, 0, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     "createdAt": "2026-11-23T16:30:00Z"
   }
   ```
+
+#### 4.4.7. `GET /api/v1/transactions/{id}` & Ownership (IDOR Defense)
+- **Headers:** `Authorization: Bearer <accessToken>`
+- **Processing Logic:**
+  1. Retrieve `userId` from `@CurrentUser`.
+  2. Query `Transaction` by `id`. If not found, throw `TransactionNotFoundException` (HTTP 404).
+  3. **IDOR Protection Check:**
+     ```java
+     Long senderUserId = tx.getSenderWallet() != null ? tx.getSenderWallet().getUserId() : null;
+     Long receiverUserId = tx.getReceiverWallet() != null ? tx.getReceiverWallet().getUserId() : null;
+     if (!userId.equals(senderUserId) && !userId.equals(receiverUserId)) {
+         throw new AccessDeniedException("Bạn không có quyền truy cập thông tin giao dịch này"); // HTTP 403 Forbidden
+     }
+     ```
+  4. Return `TransactionResponse`.
 
 ---
 
@@ -301,10 +330,12 @@ sequenceDiagram
     Client->>Filter: Request with Authorization: Bearer <token>
     Filter->>Provider: Extract Token & Parse Claims
     alt Token Missing or Invalid Signature
-        Filter->>Filter: Continue chain as unauthenticated
+        Filter->>Filter: Continue chain as unauthenticated (rejected later if protected)
     else Token Expired
         Filter-->>Client: 401 Unauthorized (TOKEN_EXPIRED)
-    else Token Valid
+    else Token Type != "ACCESS"
+        Filter-->>Client: 401 Unauthorized (INVALID_TOKEN_TYPE)
+    else Token Valid & Type == "ACCESS"
         Filter->>Redis: Check EXISTS auth:blacklist:{jti}
         alt Is Blacklisted
             Filter-->>Client: 401 Unauthorized (TOKEN_REVOKED)
@@ -316,8 +347,8 @@ sequenceDiagram
     end
 ```
 
-#### 4.6.2. `CurrentUserArgumentResolver` Refactoring
-Update `CurrentUserArgumentResolver.java` to extract `userId` from `SecurityContextHolder`:
+#### 4.6.2. `CurrentUserArgumentResolver` Refactoring (Zero Fallback)
+Update `CurrentUserArgumentResolver.java` to extract `userId` strictly from `SecurityContextHolder`:
 ```java
 @Component
 public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolver {
@@ -338,15 +369,11 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
         if (auth != null && auth.getPrincipal() instanceof UserPrincipal principal) {
             return principal.getUserId();
         }
-        // Fallback for Phase A testing or backwards compatibility if configured
-        String legacyHeader = webRequest.getHeader("X-User-Id");
-        if (legacyHeader != null && !legacyHeader.isBlank()) {
-            return Long.valueOf(legacyHeader.trim());
-        }
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unauthenticated request");
     }
 }
 ```
+*Security Invariant:* All fallback reading of `X-User-Id` is completely eliminated. Tests and API clients must authenticate via signed JWTs or Spring Security Test helpers (`@WithMockUser` or `SecurityContextTestUtils.setAuthenticatedUser(userId)`).
 
 ---
 
@@ -354,21 +381,32 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
 
 The builder has autonomy over:
 1. **JWT Library Selection:** Choice between `io.jsonwebtoken:jjwt-api:0.12.6` (plus `jjwt-impl`, `jjwt-jackson`) or Spring Security's Nimbus JOSE. (`jjwt` is recommended).
-2. **Error Response Body Structure:** May reuse existing `ErrorResponse` DTO with `errorCode` and `message`.
-3. **Integration Test Strategy:** Whether to use `@WithMockUser` custom annotation or generate actual signed JWTs in test helper utilities.
+2. **Error Response Body Structure:** Standard `ErrorResponse` DTO with `errorCode` and `message`.
+3. **Grace Period Property:** Binds `vwallet.jwt.refresh-grace-period-seconds` (default: 30) from `application.yaml`.
 
 ---
 
 ## 6. Verification & Test Criteria
 
-1. **Unit Tests:**
-   - `JwtTokenProviderTest`: Generate, validate, parse claims, check expired token handling.
-   - `AuthServiceTest`: Mock repository/Redis; test register, login, refresh rotation, reuse detection, logout blacklist.
-   - `UserServiceTest`: Test `verifyPin` throwing `PinNotSetException` vs `InvalidPinException`.
-2. **Security Integration Tests:**
-   - Access protected endpoints (`/api/v1/transfers`, `/api/v1/wallets/me`) without token $\rightarrow$ verify 401 Unauthorized.
-   - Access with valid token $\rightarrow$ verify 200 OK.
-   - Access with blacklisted token (after logout) $\rightarrow$ verify 401 Unauthorized.
-   - Refresh token rotation: Call `/refresh` once $\rightarrow$ succeed; Call `/refresh` with the old token again $\rightarrow$ detect breach, revoke session, return 401.
-3. **Regression Tests:**
-   - Execute all existing 102 tests in `ewallet-backend` to guarantee zero regressions.
+### 6.1. Unit Tests:
+- `JwtTokenProviderTest`: Generate, validate, parse claims, enforce token type (`ACCESS` vs `REFRESH`), check expired token handling.
+- `AuthServiceTest`: Mock repository/Redis; test register (canonicalizing phone, creating wallet), login, refresh rotation, race-condition grace period, reuse detection, logout blacklist.
+- `UserServiceTest`: Test `verifyPin` throwing `PinNotSetException` vs `InvalidPinException`.
+
+### 6.2. Security Integration Tests:
+- **Authentication Protection:** Access protected endpoints (`/api/v1/transfers`, `/api/v1/wallets/me`) without token $\rightarrow$ verify 401 Unauthorized.
+- **Valid Token Access:** Access with valid Access Token $\rightarrow$ verify 200 OK.
+- **Blacklisted Token Access:** Access with revoked token (after logout) $\rightarrow$ verify 401 Unauthorized (`TOKEN_REVOKED`).
+- **Token Type Confusion Tests:**
+  - Send a Refresh Token (`type="REFRESH"`) as `Bearer` header to `/api/v1/transfers` $\rightarrow$ Filter rejects with 401 Unauthorized (`INVALID_TOKEN_TYPE`).
+  - Send an Access Token (`type="ACCESS"`) in request body to `/api/v1/auth/refresh` $\rightarrow$ Endpoint rejects with 401 Unauthorized (`INVALID_TOKEN_TYPE`).
+- **Refresh Token Rotation & Grace Period Tests:**
+  - **Case A (Grace Period In-Flight):** Call `/refresh` with `refreshToken1` $\rightarrow$ succeeds, returns `tokenPairA`. Immediately call `/refresh` again with `refreshToken1` within the Grace Period window (e.g. within 30s) $\rightarrow$ returns 200 OK with cached `tokenPairA`.
+  - **Case B (Post Grace Period / Breach Detection):** Call `/refresh` with an old/reused token after Grace Period expires $\rightarrow$ returns 401 Unauthorized with code `TOKEN_REUSE_DETECTED`, and asserts that `auth:refresh:{userId}` is deleted from Redis.
+- **IDOR Protection Tests:**
+  - User C (ID 3) calls `GET /api/v1/transactions/{id}` for a transaction between User A (ID 1) and User B (ID 2) $\rightarrow$ returns 403 Forbidden.
+  - User A or User B calls `GET /api/v1/transactions/{id}` $\rightarrow$ returns 200 OK with transaction details.
+
+### 6.3. Regression Tests & Test Migration:
+- Update existing Phase A test utilities: inject `UserPrincipal` into `SecurityContextHolder` in test suites (`TransferControllerTest`, `WalletControllerTest`, `PaymentControllerTest`, `P2PTransferDeadlockTest`, `TopupIdempotencyIntegrationTest`).
+- Run `./mvnw test` across all 102 existing tests to guarantee zero regressions.
