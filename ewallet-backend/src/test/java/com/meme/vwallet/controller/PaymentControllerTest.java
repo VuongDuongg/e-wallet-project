@@ -216,6 +216,16 @@ class PaymentControllerTest {
             mockMvc.perform(get("/api/v1/transactions/9999"))
                     .andExpect(status().isNotFound());
         }
+
+        @Test
+        @DisplayName("Should return 403 when user does not own transaction (IDOR defense)")
+        void shouldReturn403WhenNotOwner() throws Exception {
+            when(paymentService.getTransactionStatus(eq(2L), eq(3003L)))
+                    .thenThrow(new ResponseStatusException(HttpStatus.FORBIDDEN, "Bạn không có quyền truy cập thông tin giao dịch này"));
+
+            mockMvc.perform(get("/api/v1/transactions/3003"))
+                    .andExpect(status().isForbidden());
+        }
     }
 
     @Nested
