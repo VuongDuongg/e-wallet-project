@@ -8,6 +8,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -45,6 +46,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
+    @Autowired
     public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider,
                                    RedisTemplate<String, Object> redisTemplate,
                                    ObjectMapper objectMapper) {
@@ -53,16 +55,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper();
     }
 
-    public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider,
-                                   RedisTemplate<String, Object> redisTemplate) {
-        this(jwtTokenProvider, redisTemplate, new ObjectMapper());
-    }
-
     @Override
     public boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         if (path == null || path.isEmpty()) {
+            path = request.getPathInfo();
+        }
+        if (path == null || path.isEmpty()) {
             path = request.getRequestURI();
+            String contextPath = request.getContextPath();
+            if (contextPath != null && !contextPath.isEmpty() && path != null && path.startsWith(contextPath)) {
+                path = path.substring(contextPath.length());
+            }
         }
         for (String pattern : EXCLUDE_PATTERNS) {
             if (pathMatcher.match(pattern, path)) {

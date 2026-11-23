@@ -3,7 +3,6 @@ package com.meme.vwallet.security;
 import com.meme.vwallet.config.SecurityBeansConfig;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.MalformedJwtException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +13,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockFilterChain;
@@ -29,10 +29,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -78,6 +75,17 @@ class JwtAuthenticationFilterTest {
     void shouldNotFilter_publicEndpoints_shouldReturnTrue(String path) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
         request.setServletPath(path);
+
+        assertThat(filter.shouldNotFilter(request)).isTrue();
+    }
+
+    @Test
+    @DisplayName("shouldNotFilter should return true when requestURI has contextPath and servletPath is empty")
+    void shouldNotFilter_withContextPathInRequestUri_shouldReturnTrue() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/app/api/v1/auth/login");
+        request.setContextPath("/app");
+        request.setRequestURI("/app/api/v1/auth/login");
+        request.setServletPath("");
 
         assertThat(filter.shouldNotFilter(request)).isTrue();
     }
@@ -285,6 +293,17 @@ class JwtAuthenticationFilterTest {
         assertThat(auth).isNotNull();
         assertThat(auth.getPrincipal()).isEqualTo(principal);
         assertThat(auth.getAuthorities()).isEqualTo(principal.getAuthorities());
+    }
+
+    @Test
+    @DisplayName("FilterRegistrationBean should disable servlet filter registration in container")
+    void jwtFilterRegistration_shouldBeDisabled() {
+        SecurityBeansConfig config = new SecurityBeansConfig();
+        FilterRegistrationBean<JwtAuthenticationFilter> registration = config.jwtFilterRegistration(filter);
+
+        assertThat(registration).isNotNull();
+        assertThat(registration.isEnabled()).isFalse();
+        assertThat(registration.getFilter()).isSameAs(filter);
     }
 
     @Test
