@@ -209,12 +209,20 @@ public class PaymentService {
     }
 
     /**
-     * Retrieves transaction status by transaction ID.
+     * Retrieves transaction status by transaction ID with IDOR protection.
      */
     @Transactional(readOnly = true)
-    public TransactionResponse getTransactionStatus(Long transactionId) {
+    public TransactionResponse getTransactionStatus(Long userId, Long transactionId) {
         Transaction tx = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy giao dịch: " + transactionId));
+
+        if (userId != null) {
+            Long senderUserId = tx.getSenderWallet() != null ? tx.getSenderWallet().getUserId() : null;
+            Long receiverUserId = tx.getReceiverWallet() != null ? tx.getReceiverWallet().getUserId() : null;
+            if (!userId.equals(senderUserId) && !userId.equals(receiverUserId)) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bạn không có quyền truy cập thông tin giao dịch này");
+            }
+        }
 
         return TransactionResponse.builder()
                 .id(tx.getId())
@@ -228,6 +236,14 @@ public class PaymentService {
                 .externalRef(tx.getExternalRef())
                 .createdAt(tx.getCreatedAt())
                 .build();
+    }
+
+    /**
+     * Retrieves transaction status by transaction ID without user restriction.
+     */
+    @Transactional(readOnly = true)
+    public TransactionResponse getTransactionStatus(Long transactionId) {
+        return getTransactionStatus(null, transactionId);
     }
 
     /**

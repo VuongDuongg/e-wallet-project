@@ -2,6 +2,7 @@ package com.meme.vwallet.service;
 
 import com.meme.vwallet.entity.User;
 import com.meme.vwallet.exception.InvalidPinException;
+import com.meme.vwallet.exception.PinNotSetException;
 import com.meme.vwallet.exception.UserNotFoundException;
 import com.meme.vwallet.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,14 +83,13 @@ class UserServiceTest {
         }
 
         @Test
-        @DisplayName("should throw InvalidPinException when user has null pin_hash")
-        void verifyPin_whenPinHashIsNull_shouldThrowInvalidPinException() {
+        @DisplayName("should throw PinNotSetException when user has null pin_hash")
+        void verifyPin_whenPinHashIsNull_shouldThrowPinNotSetException() {
             sampleUser.setPinHash(null);
             when(userRepository.findById(1L)).thenReturn(Optional.of(sampleUser));
 
             assertThatThrownBy(() -> userService.verifyPin(1L, "123456"))
-                    .isInstanceOf(InvalidPinException.class)
-                    .hasMessageContaining("Invalid PIN");
+                    .isInstanceOf(PinNotSetException.class);
 
             verify(userRepository).findById(1L);
         }

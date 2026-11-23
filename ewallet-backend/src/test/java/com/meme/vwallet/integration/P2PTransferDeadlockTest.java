@@ -12,6 +12,7 @@ import com.meme.vwallet.repository.WalletRepository;
 import com.meme.vwallet.service.IdempotencyService;
 import com.meme.vwallet.service.TransferService;
 import com.meme.vwallet.service.UserService;
+import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -135,10 +136,13 @@ class P2PTransferDeadlockTest {
                         .build());
         walletB.setBalance(100_000L);
         walletRepository.save(walletB);
+
+        SecurityTestUtils.setAuthenticatedUser(userA.getId(), userA.getPhoneNumber(), userA.getFullName());
     }
 
     @AfterEach
     void tearDown() {
+        SecurityTestUtils.clearSecurityContext();
         ledgerEntryRepository.deleteAll();
         transactionRepository.deleteAll();
         walletRepository.findById(1L).ifPresent(w -> {
@@ -181,6 +185,7 @@ class P2PTransferDeadlockTest {
                 readyLatch.countDown();
                 try {
                     startLatch.await();
+                    SecurityTestUtils.setAuthenticatedUser(userA.getId(), userA.getPhoneNumber(), userA.getFullName());
                     TransferRequest request = TransferRequest.builder()
                             .receiverPhone(userB.getPhoneNumber())
                             .amount(transferAmount)
@@ -198,6 +203,7 @@ class P2PTransferDeadlockTest {
                 } catch (Throwable t) {
                     exceptions.add(t);
                 } finally {
+                    SecurityTestUtils.clearSecurityContext();
                     doneLatch.countDown();
                 }
             });
@@ -210,6 +216,7 @@ class P2PTransferDeadlockTest {
                 readyLatch.countDown();
                 try {
                     startLatch.await();
+                    SecurityTestUtils.setAuthenticatedUser(userB.getId(), userB.getPhoneNumber(), userB.getFullName());
                     TransferRequest request = TransferRequest.builder()
                             .receiverPhone(userA.getPhoneNumber())
                             .amount(transferAmount)
@@ -227,6 +234,7 @@ class P2PTransferDeadlockTest {
                 } catch (Throwable t) {
                     exceptions.add(t);
                 } finally {
+                    SecurityTestUtils.clearSecurityContext();
                     doneLatch.countDown();
                 }
             });

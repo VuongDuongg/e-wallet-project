@@ -1,5 +1,6 @@
 package com.meme.vwallet.security;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,15 +9,19 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.ModelAndViewContainer;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -33,7 +38,6 @@ class CurrentUserArgumentResolverTest {
     @Mock
     private WebDataBinderFactory binderFactory;
 
-    // Dummy controller methods for parameter reflection
     @SuppressWarnings("unused")
     private void sampleMethodWithLong(@CurrentUser Long userId) {}
 
@@ -49,6 +53,12 @@ class CurrentUserArgumentResolverTest {
     @BeforeEach
     void setUp() {
         resolver = new CurrentUserArgumentResolver();
+        SecurityContextHolder.clearContext();
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     private MethodParameter getMethodParam(String methodName, Class<?> paramType) throws NoSuchMethodException {
@@ -85,66 +95,83 @@ class CurrentUserArgumentResolverTest {
     }
 
     @Test
-    @DisplayName("resolveArgument should return parsed Long when X-User-Id is valid")
-    void resolveArgument_withValidHeader_shouldReturnUserId() throws Exception {
+    @DisplayName("resolveArgument should return userId from authenticated UserPrincipal in SecurityContextHolder")
+    void resolveArgument_withAuthenticatedUserPrincipal_shouldReturnUserId() throws Exception {
         MethodParameter param = getMethodParam("sampleMethodWithLong", Long.class);
-        when(webRequest.getHeader("X-User-Id")).thenReturn("42");
+        UserPrincipal principal = new UserPrincipal(42L, "0912345678", "Nguyen Van A", "test-jti", Instant.now().plusSeconds(300));
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                principal, null, principal.getAuthorities()
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
 
         Object result = resolver.resolveArgument(param, mavContainer, webRequest, binderFactory);
 
         assertThat(result).isEqualTo(42L);
+        verifyNoInteractions(webRequest);
     }
 
     @Test
-    @DisplayName("resolveArgument should trim whitespace and return parsed Long")
-    void resolveArgument_withPaddedHeader_shouldReturnUserId() throws Exception {
+    @DisplayName("resolveArgument should completely ignore X-User-Id header and return authenticated userId")
+    void resolveArgument_withUserPrincipalAndDifferentXUserIdHeader_shouldReturnPrincipalUserIdAndIgnoreHeader() throws Exception {
         MethodParameter param = getMethodParam("sampleMethodWithLong", Long.class);
-        when(webRequest.getHeader("X-User-Id")).thenReturn("  100  ");
+        UserPrincipal principal = new UserPrincipal(100L, "0987654321", "Tran Thi B", "jti-100", Instant.now().plusSeconds(300));
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                principal, null, principal.getAuthorities()
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
 
+        // Even if X-User-Id is passed as 999, resolver strictly uses principal's 100L
         Object result = resolver.resolveArgument(param, mavContainer, webRequest, binderFactory);
 
         assertThat(result).isEqualTo(100L);
+        verifyNoInteractions(webRequest);
     }
 
     @Test
-    @DisplayName("resolveArgument should throw UNAUTHORIZED when X-User-Id is missing (null)")
-    void resolveArgument_withMissingHeader_shouldThrowUnauthorized() throws Exception {
+    @DisplayName("resolveArgument should throw UNAUTHORIZED when unauthenticated, ignoring any X-User-Id header")
+    void resolveArgument_whenUnauthenticated_shouldThrowUnauthorizedEvenWithHeader() throws Exception {
         MethodParameter param = getMethodParam("sampleMethodWithLong", Long.class);
-        when(webRequest.getHeader("X-User-Id")).thenReturn(null);
+        SecurityContextHolder.clearContext();
 
         assertThatThrownBy(() -> resolver.resolveArgument(param, mavContainer, webRequest, binderFactory))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
                     ResponseStatusException rse = (ResponseStatusException) ex;
                     assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                    assertThat(rse.getReason()).isEqualTo("Unauthenticated request");
                 });
     }
 
     @Test
-    @DisplayName("resolveArgument should throw UNAUTHORIZED when X-User-Id is blank")
-    void resolveArgument_withBlankHeader_shouldThrowUnauthorized() throws Exception {
+    @DisplayName("resolveArgument should throw UNAUTHORIZED when authentication is null")
+    void resolveArgument_whenAuthenticationIsNull_shouldThrowUnauthorized() throws Exception {
         MethodParameter param = getMethodParam("sampleMethodWithLong", Long.class);
-        when(webRequest.getHeader("X-User-Id")).thenReturn("   ");
+        SecurityContextHolder.getContext().setAuthentication(null);
 
         assertThatThrownBy(() -> resolver.resolveArgument(param, mavContainer, webRequest, binderFactory))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
                     ResponseStatusException rse = (ResponseStatusException) ex;
                     assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                    assertThat(rse.getReason()).isEqualTo("Unauthenticated request");
                 });
     }
 
     @Test
-    @DisplayName("resolveArgument should throw UNAUTHORIZED when X-User-Id is not a valid number")
-    void resolveArgument_withInvalidHeader_shouldThrowUnauthorized() throws Exception {
+    @DisplayName("resolveArgument should throw UNAUTHORIZED when principal is not UserPrincipal")
+    void resolveArgument_whenPrincipalIsNotUserPrincipal_shouldThrowUnauthorized() throws Exception {
         MethodParameter param = getMethodParam("sampleMethodWithLong", Long.class);
-        when(webRequest.getHeader("X-User-Id")).thenReturn("abc");
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                "anonymousUser", null
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
 
         assertThatThrownBy(() -> resolver.resolveArgument(param, mavContainer, webRequest, binderFactory))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
                     ResponseStatusException rse = (ResponseStatusException) ex;
                     assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                    assertThat(rse.getReason()).isEqualTo("Unauthenticated request");
                 });
     }
 }

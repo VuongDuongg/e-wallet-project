@@ -2,6 +2,8 @@ package com.meme.vwallet.security;
 
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
@@ -11,8 +13,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Component
 public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolver {
-
-    public static final String USER_ID_HEADER = "X-User-Id";
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
@@ -26,14 +26,10 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
                                   ModelAndViewContainer mavContainer,
                                   NativeWebRequest webRequest,
                                   WebDataBinderFactory binderFactory) {
-        String headerValue = webRequest.getHeader(USER_ID_HEADER);
-        if (headerValue == null || headerValue.trim().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing or invalid X-User-Id header");
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof UserPrincipal principal) {
+            return principal.getUserId();
         }
-        try {
-            return Long.valueOf(headerValue.trim());
-        } catch (NumberFormatException e) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing or invalid X-User-Id header");
-        }
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Unauthenticated request");
     }
 }

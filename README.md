@@ -150,7 +150,7 @@ sequenceDiagram
     participant TX as TransferService (@Transactional)
     participant DB as MySQL (InnoDB)
 
-    Alice->>API: POST /api/v1/transfers (Header: Idempotency-Key, X-User-Id)
+    Alice->>API: POST /api/v1/transfers (Header: Idempotency-Key, Authorization: Bearer <token>)
     API->>RS: getReceipt(key)
     alt Đã có kết quả trước đó
         RS-->>API: Receipt JSON
@@ -290,21 +290,84 @@ Dữ liệu được nạp tự động qua file [data.sql](file:///d:/Project_J
 ## 8. Tài liệu API & Ví dụ cURL
 
 > [!TIP]
-> Cơ chế phân quyền giai đoạn này sử dụng Header `X-User-Id` để xác định người dùng. Mọi giao dịch chuyển tiền đều kiểm tra mã `pin` đi kèm bằng BCrypt.
+> Hệ thống sử dụng cơ chế xác thực JWT Bearer Token (`Authorization: Bearer <accessToken>`). Để gọi các API bảo vệ, trước tiên hãy gọi `/api/v1/auth/login` (hoặc `/register`) để nhận JWT access token. Mọi giao dịch chuyển tiền đều kiểm tra mã `pin` giao dịch đi kèm bằng BCrypt.
 
-### 💸 8.1. Chuyển tiền nội bộ P2P
-Thực hiện chuyển tiền từ User A (`X-User-Id: 2`) sang User B (`receiverPhone: 0987654321`).
+### 🔑 8.1. Đăng ký & Đăng nhập (Xác thực JWT)
+
+#### Đăng ký tài khoản mới:
+- **Endpoint:** `POST /api/v1/auth/register`
+- **Headers:** `Content-Type: application/json`
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phoneNumber": "0912345678",
+    "fullName": "Nguyen Van C",
+    "password": "Password123"
+  }'
+```
+
+#### Đăng nhập hệ thống:
+- **Endpoint:** `POST /api/v1/auth/login`
+- **Headers:** `Content-Type: application/json`
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phoneNumber": "0901234567",
+    "password": "Password123"
+  }'
+```
+
+**Phản hồi thành công (200 OK):**
+```json
+{
+  "userId": 2,
+  "phoneNumber": "0901234567",
+  "fullName": "Nguyen Van A",
+  "hasPin": true,
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": 900
+}
+```
+
+---
+
+### 🔢 8.2. Thiết lập mã PIN giao dịch ban đầu (nếu hasPin = false)
+- **Endpoint:** `POST /api/v1/users/pin`
+- **Headers:**
+  - `Content-Type: application/json`
+  - `Authorization: Bearer <accessToken>`
+
+```bash
+curl -X POST http://localhost:8080/api/v1/users/pin \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <accessToken>" \
+  -d '{
+    "pin": "123456",
+    "confirmPin": "123456"
+  }'
+```
+
+---
+
+### 💸 8.3. Chuyển tiền nội bộ P2P
+Thực hiện chuyển tiền từ tài khoản hiện tại sang Người nhận B (`receiverPhone: 0987654321`).
 
 - **Endpoint:** `POST /api/v1/transfers`
 - **Headers:**
   - `Content-Type: application/json`
-  - `X-User-Id: 2`
+  - `Authorization: Bearer <accessToken>`
   - `Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-111122223333`
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/transfers \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: 2" \
+  -H "Authorization: Bearer <accessToken>" \
   -H "Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-111122223333" \
   -d '{
     "receiverPhone": "0987654321",
@@ -329,18 +392,18 @@ curl -X POST http://localhost:8080/api/v1/transfers \
 
 ---
 
-### 💳 8.2. Khởi tạo nạp tiền qua VNPay (Phase 1)
-User A tạo yêu cầu nạp tiền 100,000 VND.
+### 💳 8.4. Khởi tạo nạp tiền qua VNPay (Phase 1)
+User tạo yêu cầu nạp tiền 100,000 VND vào ví cá nhân.
 
 - **Endpoint:** `POST /api/v1/payments/topup`
 - **Headers:**
   - `Content-Type: application/json`
-  - `X-User-Id: 2`
+  - `Authorization: Bearer <accessToken>`
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/payments/topup \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: 2" \
+  -H "Authorization: Bearer <accessToken>" \
   -d '{
     "amount": 100000,
     "description": "Nap tien vao vi"
@@ -357,8 +420,8 @@ curl -X POST http://localhost:8080/api/v1/payments/topup \
 
 ---
 
-### 🔔 8.3. VNPay Webhook IPN Callback (Phase 2)
-Cổng VNPay bắn kết quả giao dịch thanh toán về hệ thống ví.
+### 🔔 8.5. VNPay Webhook IPN Callback (Phase 2)
+Cổng VNPay bắn kết quả giao dịch thanh toán về hệ thống ví (Webhook không yêu cầu Bearer Token).
 
 - **Endpoint:** `POST /api/v1/payments/webhook`
 
@@ -381,16 +444,34 @@ curl -X POST "http://localhost:8080/api/v1/payments/webhook?vnp_TxnRef=2&vnp_Amo
 
 ---
 
-### 👛 8.4. Tra cứu thông tin & Số dư ví
-- **Endpoint:** `GET /api/v1/wallets/me`
-- **Headers:** `X-User-Id: 2`
+### 👤 8.6. Tra cứu thông tin người dùng & Số dư ví
+- **Endpoint Thông tin tài khoản:** `GET /api/v1/users/me`
+- **Endpoint Số dư ví:** `GET /api/v1/wallets/me`
+- **Headers:** `Authorization: Bearer <accessToken>`
+
+```bash
+curl -X GET http://localhost:8080/api/v1/users/me \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+**Phản hồi User:**
+```json
+{
+  "userId": 2,
+  "phoneNumber": "0901234567",
+  "fullName": "Nguyen Van A",
+  "hasPin": true,
+  "status": "ACTIVE",
+  "createdAt": "2026-11-20T00:00:00Z"
+}
+```
 
 ```bash
 curl -X GET http://localhost:8080/api/v1/wallets/me \
-  -H "X-User-Id: 2"
+  -H "Authorization: Bearer <accessToken>"
 ```
 
-**Phản hồi:**
+**Phản hồi Ví:**
 ```json
 {
   "id": 2,
@@ -405,11 +486,13 @@ curl -X GET http://localhost:8080/api/v1/wallets/me \
 
 ---
 
-### 🔍 8.5. Tra cứu trạng thái Giao dịch
+### 🔍 8.7. Tra cứu trạng thái Giao dịch
 - **Endpoint:** `GET /api/v1/transactions/{id}`
+- **Headers:** `Authorization: Bearer <accessToken>`
 
 ```bash
-curl -X GET http://localhost:8080/api/v1/transactions/1
+curl -X GET http://localhost:8080/api/v1/transactions/1 \
+  -H "Authorization: Bearer <accessToken>"
 ```
 
 ---
@@ -437,10 +520,10 @@ Dự án đạt **100% tỷ lệ pass** trên 102 bài kiểm thử tự động
 
 ### 🗺️ Lộ trình phát triển (Roadmap)
 - [x] **Giai đoạn A (Core Engine):** Hoàn thành Sổ cái kế toán kép, P2P Transfer chống Deadlock, Redis Idempotency, và VNPay Top-up.
-- [ ] **Giai đoạn B (Authentication & Security):**
+- [x] **Giai đoạn B (Authentication & Security):**
   - Triển khai Spring Security Filter với JWT (JSON Web Token).
-  - API Đăng ký tài khoản (`/api/v1/auth/register`), Đăng nhập (`/api/v1/auth/login`), Refresh Token.
-  - Quản lý thiết bị đăng nhập và xác thực sinh trắc học.
+  - API Đăng ký tài khoản (`/api/v1/auth/register`), Đăng nhập (`/api/v1/auth/login`), Refresh Token với Single-Device RTR & Grace Period.
+  - Quản lý phiên đăng nhập, thu hồi token và blacklist qua Redis.
 - [ ] **Giai đoạn C (Mobile Application):**
   - Xây dựng ứng dụng di động đa nền tảng bằng **Flutter** trong thư mục `ewallet-mobile/`.
   - Tích hợp quét mã QR chuyển tiền và deep link thanh toán cổng VNPay.

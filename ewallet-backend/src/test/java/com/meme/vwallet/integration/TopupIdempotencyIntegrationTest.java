@@ -16,6 +16,7 @@ import com.meme.vwallet.repository.WalletRepository;
 import com.meme.vwallet.service.IdempotencyService;
 import com.meme.vwallet.service.PaymentService;
 import com.meme.vwallet.service.VnpayService;
+import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -105,10 +106,13 @@ class TopupIdempotencyIntegrationTest {
                         .build());
         userWallet.setBalance(100_000L);
         walletRepository.save(userWallet);
+
+        SecurityTestUtils.setAuthenticatedUser(userA.getId(), userA.getPhoneNumber(), userA.getFullName());
     }
 
     @AfterEach
     void tearDown() {
+        SecurityTestUtils.clearSecurityContext();
         ledgerEntryRepository.deleteAll();
         transactionRepository.deleteAll();
         walletRepository.findById(1L).ifPresent(w -> {
@@ -131,6 +135,7 @@ class TopupIdempotencyIntegrationTest {
         long initialBalance = initialWallet.getBalance();
 
         // 1. Initiate a PENDING top-up transaction for User A (500,000 VND)
+        SecurityTestUtils.setAuthenticatedUser(userA.getId(), userA.getPhoneNumber(), userA.getFullName());
         TopupRequest request = TopupRequest.builder()
                 .amount(topupAmount)
                 .description("Topup test idempotency")
@@ -169,6 +174,7 @@ class TopupIdempotencyIntegrationTest {
                 } catch (Throwable t) {
                     errors.add(t);
                 } finally {
+                    SecurityTestUtils.clearSecurityContext();
                     doneLatch.countDown();
                 }
             });
