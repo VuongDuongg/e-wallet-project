@@ -21,3 +21,11 @@ spring:
     init:
       mode: always
 
+vwallet:
+  jwt:
+    secret: "dGhpc19pc19hX3Zlcnlfc2VjdXJlXzI1Nl9iaXRfc2VjcmV0X2tleV9mb3JfdndhbGxldF9kZXYh"
+    access-token-expiration-seconds: 900
+    refresh-token-expiration-seconds: 604800
+    refresh-grace-period-seconds: 30
+
+
