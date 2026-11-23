@@ -10,7 +10,9 @@ import com.meme.vwallet.exception.InvalidPinException;
 import com.meme.vwallet.exception.UserNotFoundException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
+import com.meme.vwallet.security.UserPrincipal;
 import com.meme.vwallet.service.TransferService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,6 +22,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import tools.jackson.databind.ObjectMapper;
@@ -58,12 +62,28 @@ class TransferControllerTest {
                 .setCustomArgumentResolvers(new CurrentUserArgumentResolver())
                 .build();
 
+        UserPrincipal principal = new UserPrincipal(
+                1L,
+                "0901234567",
+                "Nguyen Van A",
+                "test-jti",
+                Instant.now().plusSeconds(3600)
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities())
+        );
+
         validRequest = TransferRequest.builder()
                 .receiverPhone("0907654321")
                 .amount(200_000L)
                 .pin("123456")
                 .description("Tien an trua")
                 .build();
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Nested
@@ -110,6 +130,7 @@ class TransferControllerTest {
         @Test
         @DisplayName("should return 401 UNAUTHORIZED when X-User-Id header is missing")
         void transfer_missingUserIdHeader_returns401() throws Exception {
+            SecurityContextHolder.clearContext();
             mockMvc.perform(post("/api/v1/transfers")
                             .header("Idempotency-Key", "req-idemp-123")
                             .contentType(MediaType.APPLICATION_JSON)
@@ -117,7 +138,7 @@ class TransferControllerTest {
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.status", is(401)))
                     .andExpect(jsonPath("$.error", is("Unauthorized")))
-                    .andExpect(jsonPath("$.message", containsString("Missing or invalid X-User-Id")));
+                    .andExpect(jsonPath("$.message", containsString("Unauthenticated request")));
         }
 
         @Test

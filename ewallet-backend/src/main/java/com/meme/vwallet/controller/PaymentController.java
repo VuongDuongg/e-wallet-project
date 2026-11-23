@@ -64,8 +64,11 @@ public class PaymentController {
     }
 
     @GetMapping({"/transactions/{id}", "/payments/transactions/{id}"})
-    public ResponseEntity<TransactionResponse> getTransactionStatus(@PathVariable("id") Long id) {
-        TransactionResponse response = paymentService.getTransactionStatus(id);
+    public ResponseEntity<TransactionResponse> getTransactionStatus(
+            @CurrentUser Long userId,
+            @PathVariable("id") Long id
+    ) {
+        TransactionResponse response = paymentService.getTransactionStatus(userId, id);
         return ResponseEntity.ok(response);
     }
 

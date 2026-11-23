@@ -19,6 +19,10 @@ spring:
       mode: always
       schema-locations: classpath:schema.sql
       data-locations: classpath:data.sql
+  data:
+    redis:
+      repositories:
+        enabled: false
 
 vwallet:
   jwt:
