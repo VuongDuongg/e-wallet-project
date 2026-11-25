@@ -8,10 +8,12 @@ import com.meme.vwallet.entity.User;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
+import com.meme.vwallet.repository.LedgerEntryRepository;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.UserRepository;
 import com.meme.vwallet.repository.WalletRepository;
 import com.meme.vwallet.security.JwtTokenProvider;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -62,6 +64,9 @@ class UserControllerIntegrationTest {
 
     @Autowired
     private TransactionRepository transactionRepository;
+
+    @Autowired
+    private LedgerEntryRepository ledgerEntryRepository;
 
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
@@ -123,6 +128,25 @@ class UserControllerIntegrationTest {
             String key = inv.getArgument(0);
             return redisStore.containsKey(key);
         }).when(redisTemplate).hasKey(anyString());
+
+        cleanTestData();
+    }
+
+    @AfterEach
+    void tearDown() {
+        cleanTestData();
+    }
+
+    private void cleanTestData() {
+        redisStore.clear();
+        ledgerEntryRepository.deleteAll();
+        transactionRepository.deleteAll();
+        userRepository.findAll().stream()
+                .filter(u -> u.getId() != null && u.getId() > 3L)
+                .forEach(u -> {
+                    walletRepository.findByUserId(u.getId()).ifPresent(walletRepository::delete);
+                    userRepository.delete(u);
+                });
     }
 
     private AuthResponse registerUser(String phone, String name, String password) throws Exception {
