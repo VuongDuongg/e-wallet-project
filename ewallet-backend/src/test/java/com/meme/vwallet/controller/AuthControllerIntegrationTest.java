@@ -8,9 +8,12 @@ import com.meme.vwallet.dto.response.AuthResponse;
 import com.meme.vwallet.entity.User;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.WalletStatus;
+import com.meme.vwallet.repository.LedgerEntryRepository;
+import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.UserRepository;
 import com.meme.vwallet.repository.WalletRepository;
 import com.meme.vwallet.security.JwtTokenProvider;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +60,12 @@ class AuthControllerIntegrationTest {
 
     @Autowired
     private WalletRepository walletRepository;
+
+    @Autowired
+    private TransactionRepository transactionRepository;
+
+    @Autowired
+    private LedgerEntryRepository ledgerEntryRepository;
 
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
@@ -118,6 +127,25 @@ class AuthControllerIntegrationTest {
             String key = inv.getArgument(0);
             return redisStore.containsKey(key);
         }).when(redisTemplate).hasKey(anyString());
+
+        cleanTestData();
+    }
+
+    @AfterEach
+    void tearDown() {
+        cleanTestData();
+    }
+
+    private void cleanTestData() {
+        redisStore.clear();
+        ledgerEntryRepository.deleteAll();
+        transactionRepository.deleteAll();
+        userRepository.findAll().stream()
+                .filter(u -> u.getId() != null && u.getId() > 3L)
+                .forEach(u -> {
+                    walletRepository.findByUserId(u.getId()).ifPresent(walletRepository::delete);
+                    userRepository.delete(u);
+                });
     }
 
     @Test
@@ -399,6 +427,37 @@ class AuthControllerIntegrationTest {
         // 2. Subsequent request with blacklisted access token -> 401 TOKEN_REVOKED
         mockMvc.perform(get("/api/v1/users/me")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode", is("TOKEN_REVOKED")));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/auth/logout - Succeeds without request body and revokes session")
+    void logout_withoutRequestBody_returns200AndRevokesSession() throws Exception {
+        String phone = "0933441123";
+        RegisterRequest registerRequest = RegisterRequest.builder()
+                .phoneNumber(phone)
+                .fullName("Logout Empty Body Test")
+                .password("Password123!")
+                .build();
+
+        MvcResult regResult = mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(registerRequest)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        AuthResponse auth = objectMapper.readValue(regResult.getResponse().getContentAsString(), AuthResponse.class);
+
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success", is(true)));
+
+        assertThat(redisStore.get("auth:refresh:" + auth.getUserId())).isNull();
+
+        mockMvc.perform(get("/api/v1/users/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken()))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.errorCode", is("TOKEN_REVOKED")));
     }

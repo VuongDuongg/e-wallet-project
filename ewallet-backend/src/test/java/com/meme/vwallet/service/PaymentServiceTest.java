@@ -23,6 +23,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -422,6 +423,49 @@ class PaymentServiceTest {
 
             assertThatThrownBy(() -> paymentService.getTransactionStatus(9999L))
                     .isInstanceOf(ResponseStatusException.class);
+        }
+
+        @Test
+        @DisplayName("Should allow sender or receiver to view transaction status (IDOR check)")
+        void shouldAllowParticipantToViewTransactionStatus() {
+            User receiverUser = User.builder().id(3L).phoneNumber("0987654321").fullName("Tran Thi B").build();
+            Wallet receiverWallet = Wallet.builder().id(3L).user(receiverUser).balance(500000L).currency("VND").status(WalletStatus.ACTIVE).build();
+            Transaction tx = Transaction.builder()
+                    .id(1002L)
+                    .senderWallet(userWallet) // owner = 2L
+                    .receiverWallet(receiverWallet) // owner = 3L
+                    .amount(100000L)
+                    .type(TransactionType.P2P_TRANSFER)
+                    .status(TransactionStatus.COMPLETED)
+                    .createdAt(Instant.now())
+                    .build();
+
+            when(transactionRepository.findById(1002L)).thenReturn(Optional.of(tx));
+
+            assertThat(paymentService.getTransactionStatus(2L, 1002L).getId()).isEqualTo(1002L);
+            assertThat(paymentService.getTransactionStatus(3L, 1002L).getId()).isEqualTo(1002L);
+        }
+
+        @Test
+        @DisplayName("Should throw 403 Forbidden when third-party user queries transaction (IDOR defense)")
+        void shouldThrow403WhenNonParticipantQueriesTransaction() {
+            User receiverUser = User.builder().id(3L).phoneNumber("0987654321").fullName("Tran Thi B").build();
+            Wallet receiverWallet = Wallet.builder().id(3L).user(receiverUser).balance(500000L).currency("VND").status(WalletStatus.ACTIVE).build();
+            Transaction tx = Transaction.builder()
+                    .id(1003L)
+                    .senderWallet(userWallet) // owner = 2L
+                    .receiverWallet(receiverWallet) // owner = 3L
+                    .amount(100000L)
+                    .type(TransactionType.P2P_TRANSFER)
+                    .status(TransactionStatus.COMPLETED)
+                    .createdAt(Instant.now())
+                    .build();
+
+            when(transactionRepository.findById(1003L)).thenReturn(Optional.of(tx));
+
+            assertThatThrownBy(() -> paymentService.getTransactionStatus(99L, 1003L))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
         }
 
         @Test
