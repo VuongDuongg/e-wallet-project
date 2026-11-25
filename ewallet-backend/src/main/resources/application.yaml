@@ -23,9 +23,11 @@ spring:
 
 vwallet:
   jwt:
-    secret: "dGhpc19pc19hX3Zlcnlfc2VjdXJlXzI1Nl9iaXRfc2VjcmV0X2tleV9mb3JfdndhbGxldF9kZXYh"
+    secret: "${JWT_SECRET:dGhpc19pc19hX3Zlcnlfc2VjdXJlXzI1Nl9iaXRfc2VjcmV0X2tleV9mb3JfdndhbGxldF9kZXYh}"
     access-token-expiration-seconds: 900
     refresh-token-expiration-seconds: 604800
     refresh-grace-period-seconds: 30
+  cors:
+    allowed-origins: "${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:8080}"
 
 
