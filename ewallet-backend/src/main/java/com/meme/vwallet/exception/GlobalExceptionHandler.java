@@ -70,7 +70,31 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(UserNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleUserNotFoundException(UserNotFoundException ex) {
         log.warn("UserNotFoundException: {}", ex.getMessage());
-        return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidPhoneFormatException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidPhoneFormatException(InvalidPhoneFormatException ex) {
+        log.warn("InvalidPhoneFormatException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "INVALID_PHONE_FORMAT", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidQrCodeException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQrCodeException(InvalidQrCodeException ex) {
+        log.warn("InvalidQrCodeException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "INVALID_QR_CODE", ex.getMessage());
+    }
+
+    @ExceptionHandler(ExpiredQrCodeException.class)
+    public ResponseEntity<ErrorResponse> handleExpiredQrCodeException(ExpiredQrCodeException ex) {
+        log.warn("ExpiredQrCodeException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "EXPIRED_QR_CODE", ex.getMessage());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceededException(RateLimitExceededException ex) {
+        log.warn("RateLimitExceededException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMIT_EXCEEDED", ex.getMessage());
     }
 
     @ExceptionHandler(UserAlreadyExistsException.class)
