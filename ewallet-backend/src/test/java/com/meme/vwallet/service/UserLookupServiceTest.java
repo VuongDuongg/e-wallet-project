@@ -246,4 +246,29 @@ class UserLookupServiceTest {
         assertThat(response.isCanReceive()).isTrue();
         verify(redisTemplate).expire(rateKey, Duration.ofSeconds(60));
     }
+
+    @Test
+    @DisplayName("lookup target linked to SYSTEM_WALLET id=1 throws UserNotFoundException (404)")
+    void lookup_dbSystemWalletId1_throwsUserNotFound404() {
+        String rateKey = "ratelimit:lookup:2";
+        User edgeUser = User.builder()
+                .id(99L)
+                .phoneNumber("0908888888")
+                .fullName("Edge System Wallet User")
+                .status("ACTIVE")
+                .build();
+        Wallet systemWallet = Wallet.builder()
+                .id(1L)
+                .user(edgeUser)
+                .status(WalletStatus.ACTIVE)
+                .build();
+
+        when(valueOperations.increment(rateKey)).thenReturn(1L);
+        when(redisTemplate.getExpire(rateKey)).thenReturn(60L);
+        when(userRepository.findByPhoneNumber("0908888888")).thenReturn(Optional.of(edgeUser));
+        when(walletRepository.findByUserId(99L)).thenReturn(Optional.of(systemWallet));
+
+        assertThatThrownBy(() -> userLookupService.lookupByPhone(2L, "0908888888"))
+                .isInstanceOf(UserNotFoundException.class);
+    }
 }

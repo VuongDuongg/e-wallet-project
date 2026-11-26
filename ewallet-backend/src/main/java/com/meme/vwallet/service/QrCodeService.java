@@ -260,6 +260,9 @@ public class QrCodeService {
         if (!params.containsKey("d") || !params.containsKey("sig")) {
             throw new InvalidQrCodeException("Mã QR thiếu payload hoặc chữ ký");
         }
+        if (params.size() != 2) {
+            throw new InvalidQrCodeException("Mã QR chứa tham số không hợp lệ");
+        }
         return params;
     }
 
