@@ -29,6 +29,7 @@ import java.util.Objects;
 public class UserLookupService {
 
     private static final long SYSTEM_USER_ID = 1L;
+    private static final long SYSTEM_WALLET_ID = 1L;
     private static final String RATE_LIMIT_KEY_PREFIX = "ratelimit:lookup:";
     private static final Duration RATE_LIMIT_WINDOW = Duration.ofSeconds(60);
 
@@ -71,6 +72,9 @@ public class UserLookupService {
 
         Wallet targetWallet = walletRepository.findByUserId(targetUser.getId())
                 .orElseThrow(() -> new UserNotFoundException("Không tìm thấy ví của người dùng: " + normalizedPhone));
+        if (Long.valueOf(SYSTEM_WALLET_ID).equals(targetWallet.getId())) {
+            throw new UserNotFoundException("Không tìm thấy ví của người dùng: " + normalizedPhone);
+        }
 
         boolean isSelf = Objects.equals(targetUser.getId(), currentUserId);
         boolean canReceive = !isSelf

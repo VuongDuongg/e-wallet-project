@@ -285,6 +285,9 @@ class QrCodeServiceTest {
 
         assertThatThrownBy(() -> qrCodeService.parseQr(3L, new QrParseRequest("vwallet://transfer?d=" + d)))
                 .isInstanceOf(InvalidQrCodeException.class);
+
+        assertThatThrownBy(() -> qrCodeService.parseQr(3L, new QrParseRequest("vwallet://transfer?d=" + d + "&sig=" + sig + "&extra=1")))
+                .isInstanceOf(InvalidQrCodeException.class);
     }
 
     @Test
