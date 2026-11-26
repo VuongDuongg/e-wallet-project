@@ -8,12 +8,19 @@ spring:
       maximum-pool-size: 30
       minimum-idle: 10
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: none
     show-sql: true
     properties:
       hibernate:
         format_sql: true
+  kafka:
+    listener:
+      auto-startup: false
+    producer:
+      properties:
+        max.block.ms: 100
   sql:
     init:
       mode: always

@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     CONSTRAINT fk_tx_receiver FOREIGN KEY (receiver_wallet_id) REFERENCES wallets(id),
     INDEX idx_tx_sender (sender_wallet_id),
     INDEX idx_tx_receiver (receiver_wallet_id),
-    INDEX idx_tx_created (created_at)
+    INDEX idx_tx_created (created_at),
+    INDEX idx_tx_sender_created (sender_wallet_id, created_at),
+    INDEX idx_tx_receiver_created (receiver_wallet_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 4. Ledger Entries table (Append-only)
@@ -55,4 +57,36 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     CONSTRAINT fk_le_wallet FOREIGN KEY (wallet_id) REFERENCES wallets(id),
     INDEX idx_le_wallet (wallet_id),
     INDEX idx_le_tx (transaction_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 5. Withdrawals table
+CREATE TABLE IF NOT EXISTS withdrawals (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    transaction_id BIGINT NOT NULL UNIQUE,
+    user_id BIGINT NOT NULL,
+    bank_code VARCHAR(20) NOT NULL,
+    bank_account_number VARCHAR(30) NOT NULL,
+    account_holder_name VARCHAR(100) NOT NULL,
+    amount BIGINT NOT NULL,
+    bank_ref VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_wd_tx FOREIGN KEY (transaction_id) REFERENCES transactions(id),
+    CONSTRAINT fk_wd_user FOREIGN KEY (user_id) REFERENCES users(id),
+    INDEX idx_wd_user_created (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 6. Notifications table
+CREATE TABLE IF NOT EXISTS notifications (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    transaction_id BIGINT NULL,
+    type VARCHAR(30) NOT NULL,
+    title VARCHAR(150) NOT NULL,
+    message VARCHAR(500) NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_notif_user FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk_notif_tx FOREIGN KEY (transaction_id) REFERENCES transactions(id),
+    CONSTRAINT uk_notif_idemp UNIQUE (user_id, transaction_id, type),
+    INDEX idx_notif_user_read_created (user_id, is_read, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

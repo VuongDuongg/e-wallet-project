@@ -5,11 +5,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -70,7 +73,31 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(UserNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleUserNotFoundException(UserNotFoundException ex) {
         log.warn("UserNotFoundException: {}", ex.getMessage());
-        return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage());
+        return buildErrorResponse(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidPhoneFormatException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidPhoneFormatException(InvalidPhoneFormatException ex) {
+        log.warn("InvalidPhoneFormatException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "INVALID_PHONE_FORMAT", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidQrCodeException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidQrCodeException(InvalidQrCodeException ex) {
+        log.warn("InvalidQrCodeException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "INVALID_QR_CODE", ex.getMessage());
+    }
+
+    @ExceptionHandler(ExpiredQrCodeException.class)
+    public ResponseEntity<ErrorResponse> handleExpiredQrCodeException(ExpiredQrCodeException ex) {
+        log.warn("ExpiredQrCodeException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "EXPIRED_QR_CODE", ex.getMessage());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceededException(RateLimitExceededException ex) {
+        log.warn("RateLimitExceededException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMIT_EXCEEDED", ex.getMessage());
     }
 
     @ExceptionHandler(UserAlreadyExistsException.class)
@@ -110,6 +137,31 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleMissingRequestHeader(MissingRequestHeaderException ex) {
         log.warn("Missing header: {}", ex.getMessage());
         return buildErrorResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgumentException(IllegalArgumentException ex) {
+        log.warn("IllegalArgumentException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage());
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String message = "Tham số không hợp lệ: " + ex.getName();
+        log.warn("MethodArgumentTypeMismatchException: {}", message);
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "BAD_REQUEST", message);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingServletRequestParameter(MissingServletRequestParameterException ex) {
+        log.warn("MissingServletRequestParameterException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage());
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadable(HttpMessageNotReadableException ex) {
+        log.warn("HttpMessageNotReadableException: {}", ex.getMessage());
+        return buildErrorResponse(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Dữ liệu JSON không hợp lệ");
     }
 
     @ExceptionHandler(ResponseStatusException.class)

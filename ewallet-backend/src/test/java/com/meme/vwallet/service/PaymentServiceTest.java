@@ -11,6 +11,7 @@ import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.entity.enums.WalletStatus;
+import com.meme.vwallet.event.TransactionCompletedEvent;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.WalletRepository;
@@ -23,6 +24,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -58,6 +60,9 @@ class PaymentServiceTest {
 
     @Mock
     private VnpayService vnpayService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private PaymentService paymentService;
@@ -223,6 +228,7 @@ class PaymentServiceTest {
             assertThat(tx.getStatus()).isEqualTo(TransactionStatus.FAILED);
             verify(transactionRepository).save(tx);
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), anyLong());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
@@ -252,6 +258,7 @@ class PaymentServiceTest {
 
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), anyLong());
             verify(walletRepository, never()).findByIdForUpdate(anyLong());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
@@ -294,6 +301,20 @@ class PaymentServiceTest {
             assertThat(tx.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
             assertThat(tx.getExternalRef()).isEqualTo("VNPay_12345678");
             verify(transactionRepository).save(tx);
+
+            // Verify TransactionCompletedEvent published
+            ArgumentCaptor<TransactionCompletedEvent> eventCaptor = ArgumentCaptor.forClass(TransactionCompletedEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+            TransactionCompletedEvent event = eventCaptor.getValue();
+            assertThat(event.getEventId()).isNotBlank();
+            assertThat(event.getTransactionId()).isEqualTo(2002L);
+            assertThat(event.getTransactionType()).isEqualTo(TransactionType.TOPUP);
+            assertThat(event.getSenderUserId()).isEqualTo(1L);
+            assertThat(event.getReceiverUserId()).isEqualTo(2L);
+            assertThat(event.getReceiverPhone()).isEqualTo("0901234567");
+            assertThat(event.getReceiverName()).isEqualTo("Nguyen Van A");
+            assertThat(event.getAmount()).isEqualTo(500000L);
+            assertThat(event.getOccurredAt()).isNotNull();
         }
 
         @Test
@@ -326,6 +347,7 @@ class PaymentServiceTest {
             assertThat(tx.getExternalRef()).isEqualTo("VNPay_FAILED");
             verify(transactionRepository).save(tx);
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), anyLong());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test

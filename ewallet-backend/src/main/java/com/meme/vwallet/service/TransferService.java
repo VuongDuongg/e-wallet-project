@@ -8,6 +8,7 @@ import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.entity.enums.WalletStatus;
+import com.meme.vwallet.event.TransactionCompletedEvent;
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
@@ -17,12 +18,15 @@ import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -36,6 +40,7 @@ public class TransferService {
     private final UserService userService;
     private final LedgerService ledgerService;
     private final IdempotencyService idempotencyService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Autowired
     @Lazy
@@ -93,8 +98,14 @@ public class TransferService {
 
         // 2. Lookup receiver user & wallet
         User receiverUser = userService.findByPhoneNumber(request.getReceiverPhone());
+        if (Long.valueOf(1L).equals(receiverUser.getId())) {
+            throw new WalletException("Không thể chuyển tiền tới tài khoản hệ thống");
+        }
         Wallet receiverWallet = walletRepository.findByUserId(receiverUser.getId())
                 .orElseThrow(() -> new WalletException("Không tìm thấy ví của người nhận"));
+        if (Long.valueOf(1L).equals(receiverWallet.getId())) {
+            throw new WalletException("Không thể chuyển tiền tới tài khoản hệ thống");
+        }
 
         if (senderWallet.getStatus() != WalletStatus.ACTIVE) {
             throw new WalletException("Ví người gửi không ở trạng thái hoạt động: " + senderWallet.getStatus());
@@ -145,7 +156,24 @@ public class TransferService {
         // 7. Execute double-entry balance mutation
         ledgerService.executeDoubleEntry(tx, lockedSender, lockedReceiver, request.getAmount());
 
-        // 8. Build response
+        // 8. Publish flat transaction event for AFTER_COMMIT Kafka dispatch
+        Instant occurredAt = tx.getCreatedAt() != null ? tx.getCreatedAt() : Instant.now();
+        eventPublisher.publishEvent(TransactionCompletedEvent.builder()
+                .eventId(UUID.randomUUID().toString())
+                .transactionId(tx.getId())
+                .transactionType(TransactionType.P2P_TRANSFER)
+                .senderUserId(senderUser.getId())
+                .senderPhone(senderUser.getPhoneNumber())
+                .senderName(senderUser.getFullName())
+                .receiverUserId(receiverUser.getId())
+                .receiverPhone(receiverUser.getPhoneNumber())
+                .receiverName(receiverUser.getFullName())
+                .amount(request.getAmount())
+                .description(tx.getDescription())
+                .occurredAt(occurredAt)
+                .build());
+
+        // 9. Build response
         return TransferResponse.builder()
                 .success(true)
                 .transactionId(tx.getId())
