@@ -1,11 +1,16 @@
 package com.meme.vwallet.controller;
 
 import com.meme.vwallet.dto.request.TopupRequest;
+import com.meme.vwallet.dto.response.PageResponse;
 import com.meme.vwallet.dto.response.TopupResponse;
+import com.meme.vwallet.dto.response.TransactionHistoryItemResponse;
 import com.meme.vwallet.dto.response.TransactionResponse;
 import com.meme.vwallet.dto.response.VnpayIpnResponse;
+import com.meme.vwallet.entity.enums.TransactionStatus;
+import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.security.CurrentUser;
 import com.meme.vwallet.service.PaymentService;
+import com.meme.vwallet.service.TransactionQueryService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -29,6 +35,7 @@ import java.util.Map;
 public class PaymentController {
 
     private final PaymentService paymentService;
+    private final TransactionQueryService transactionQueryService;
 
     @PostMapping("/payments/topup")
     public ResponseEntity<TopupResponse> initiateTopup(
@@ -61,6 +68,23 @@ public class PaymentController {
     public ResponseEntity<Map<String, Object>> vnpayReturn(@RequestParam Map<String, String> params) {
         Map<String, Object> result = paymentService.processReturn(params);
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/transactions")
+    public ResponseEntity<PageResponse<TransactionHistoryItemResponse>> getTransactionHistory(
+            @CurrentUser Long userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) TransactionType type,
+            @RequestParam(required = false) TransactionStatus status,
+            @RequestParam(defaultValue = "ALL") String direction,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to
+    ) {
+        PageResponse<TransactionHistoryItemResponse> response = transactionQueryService.getHistory(
+                userId, page, size, type, status, direction, from, to
+        );
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping({"/transactions/{id}", "/payments/transactions/{id}"})
