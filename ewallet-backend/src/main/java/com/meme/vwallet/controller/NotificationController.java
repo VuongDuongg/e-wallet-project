@@ -69,6 +69,7 @@ public class NotificationController {
                     .data("connected"));
         } catch (IOException ex) {
             log.debug("Failed to send initial connected SSE event for userId={}", userId, ex);
+            sseEmitterRegistry.removeEmitter(userId, emitter);
             emitter.completeWithError(ex);
         }
         return emitter;

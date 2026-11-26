@@ -58,6 +58,10 @@ public class NotificationService {
             );
         }
 
+        if (notification.isRead()) {
+            return NotificationResponse.from(notification);
+        }
+
         notification.setRead(true);
         Notification saved = notificationRepository.save(notification);
         return NotificationResponse.from(saved);

@@ -111,7 +111,10 @@ public class SseEmitterRegistry {
         return new SseEmitter(emitterTimeoutMs);
     }
 
-    private void removeEmitter(Long userId, SseEmitter emitter) {
+    public void removeEmitter(Long userId, SseEmitter emitter) {
+        if (userId == null || emitter == null) {
+            return;
+        }
         CopyOnWriteArrayList<SseEmitter> list = emittersByUser.get(userId);
         if (list == null) {
             return;

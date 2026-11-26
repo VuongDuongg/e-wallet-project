@@ -147,6 +147,32 @@ class NotificationServiceTest {
     }
 
     @Test
+    @DisplayName("markAsRead returns NotificationResponse without redundant save when already read")
+    void markAsRead_alreadyRead_skipsSaveAndReturnsResponse() {
+        User owner = User.builder().id(2L).build();
+        Transaction tx = Transaction.builder().id(56L).build();
+        Notification notification = Notification.builder()
+                .id(22L)
+                .user(owner)
+                .transaction(tx)
+                .type(NotificationType.TOPUP_SUCCESS)
+                .title("Nạp tiền thành công")
+                .message("Bạn đã nạp 100,000 VND")
+                .read(true)
+                .createdAt(Instant.parse("2026-11-26T07:12:00Z"))
+                .build();
+
+        when(notificationRepository.findById(22L)).thenReturn(Optional.of(notification));
+
+        NotificationResponse response = notificationService.markAsRead(2L, 22L);
+
+        verify(notificationRepository, never()).save(any());
+        assertThat(response.getId()).isEqualTo(22L);
+        assertThat(response.getTransactionId()).isEqualTo(56L);
+        assertThat(response.isRead()).isTrue();
+    }
+
+    @Test
     @DisplayName("markAsRead throws 403 Forbidden when notification belongs to another user")
     void markAsRead_nonOwner_throws403Forbidden() {
         User otherUser = User.builder().id(99L).build();
