@@ -6,20 +6,24 @@ import com.meme.vwallet.dto.response.TransactionResponse;
 import com.meme.vwallet.dto.response.VnpayIpnResponse;
 import com.meme.vwallet.dto.response.WalletResponse;
 import com.meme.vwallet.entity.Transaction;
+import com.meme.vwallet.entity.User;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.entity.enums.WalletStatus;
+import com.meme.vwallet.event.TransactionCompletedEvent;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.WalletRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -37,6 +41,7 @@ public class PaymentService {
     private final UserService userService;
     private final LedgerService ledgerService;
     private final VnpayService vnpayService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Phase 1: Initiates a top-up transaction in PENDING state and creates payment gateway URL.
@@ -169,6 +174,27 @@ public class PaymentService {
             tx.setStatus(TransactionStatus.COMPLETED);
             tx.setExternalRef(transactionNo);
             transactionRepository.save(tx);
+
+            User receiverUser = lockedUserWallet.getUser();
+            Long receiverUserId = receiverUser != null ? receiverUser.getId() : null;
+            String receiverPhone = receiverUser != null ? receiverUser.getPhoneNumber() : null;
+            String receiverName = receiverUser != null ? receiverUser.getFullName() : null;
+            Instant occurredAt = tx.getCreatedAt() != null ? tx.getCreatedAt() : Instant.now();
+
+            eventPublisher.publishEvent(TransactionCompletedEvent.builder()
+                    .eventId(UUID.randomUUID().toString())
+                    .transactionId(tx.getId())
+                    .transactionType(TransactionType.TOPUP)
+                    .senderUserId(1L)
+                    .senderPhone("0000000000")
+                    .senderName("SYSTEM_USER")
+                    .receiverUserId(receiverUserId)
+                    .receiverPhone(receiverPhone)
+                    .receiverName(receiverName)
+                    .amount(tx.getAmount())
+                    .description(tx.getDescription())
+                    .occurredAt(occurredAt)
+                    .build());
 
             log.info("Transaction {} successfully completed and credited to wallet {}", txId, userWalletId);
             return VnpayIpnResponse.success();

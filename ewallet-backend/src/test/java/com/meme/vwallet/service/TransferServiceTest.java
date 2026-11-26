@@ -8,6 +8,7 @@ import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.entity.enums.TransactionStatus;
 import com.meme.vwallet.entity.enums.TransactionType;
 import com.meme.vwallet.entity.enums.WalletStatus;
+import com.meme.vwallet.event.TransactionCompletedEvent;
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.InsufficientBalanceException;
 import com.meme.vwallet.exception.InvalidPinException;
@@ -19,10 +20,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -55,6 +58,9 @@ class TransferServiceTest {
 
     @Mock
     private IdempotencyService idempotencyService;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private TransferService transferService;
@@ -163,6 +169,23 @@ class TransferServiceTest {
             // Verify ledger double entry called
             verify(ledgerService).executeDoubleEntry(any(Transaction.class), eq(senderWallet), eq(receiverWallet), eq(200_000L));
 
+            // Verify TransactionCompletedEvent published
+            ArgumentCaptor<TransactionCompletedEvent> eventCaptor = ArgumentCaptor.forClass(TransactionCompletedEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+            TransactionCompletedEvent event = eventCaptor.getValue();
+            assertThat(event.getEventId()).isNotBlank();
+            assertThat(event.getTransactionId()).isEqualTo(100L);
+            assertThat(event.getTransactionType()).isEqualTo(TransactionType.P2P_TRANSFER);
+            assertThat(event.getSenderUserId()).isEqualTo(1L);
+            assertThat(event.getSenderPhone()).isEqualTo("0901234567");
+            assertThat(event.getSenderName()).isEqualTo("Sender User");
+            assertThat(event.getReceiverUserId()).isEqualTo(2L);
+            assertThat(event.getReceiverPhone()).isEqualTo("0907654321");
+            assertThat(event.getReceiverName()).isEqualTo("Receiver User");
+            assertThat(event.getAmount()).isEqualTo(200_000L);
+            assertThat(event.getDescription()).isEqualTo("Chuyen tien an trua");
+            assertThat(event.getOccurredAt()).isEqualTo(now);
+
             // Verify receipt saved with 24 hours TTL
             verify(idempotencyService).saveReceipt(eq(redisKey), any(TransferResponse.class), eq(Duration.ofHours(24)));
 
@@ -239,6 +262,7 @@ class TransferServiceTest {
             verify(walletRepository, never()).findByIdForUpdate(any());
             verify(transactionRepository, never()).save(any());
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
@@ -310,6 +334,7 @@ class TransferServiceTest {
             verify(idempotencyService).releaseLock(redisKey);
             // Verify no receipt saved
             verify(idempotencyService, never()).saveReceipt(any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
@@ -349,6 +374,7 @@ class TransferServiceTest {
             verify(idempotencyService).releaseLock(redisKey);
             // Verify no receipt saved
             verify(idempotencyService, never()).saveReceipt(any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
