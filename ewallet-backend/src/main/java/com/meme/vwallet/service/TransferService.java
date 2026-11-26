@@ -93,8 +93,14 @@ public class TransferService {
 
         // 2. Lookup receiver user & wallet
         User receiverUser = userService.findByPhoneNumber(request.getReceiverPhone());
+        if (Long.valueOf(1L).equals(receiverUser.getId())) {
+            throw new WalletException("Không thể chuyển tiền tới tài khoản hệ thống");
+        }
         Wallet receiverWallet = walletRepository.findByUserId(receiverUser.getId())
                 .orElseThrow(() -> new WalletException("Không tìm thấy ví của người nhận"));
+        if (Long.valueOf(1L).equals(receiverWallet.getId())) {
+            throw new WalletException("Không thể chuyển tiền tới tài khoản hệ thống");
+        }
 
         if (senderWallet.getStatus() != WalletStatus.ACTIVE) {
             throw new WalletException("Ví người gửi không ở trạng thái hoạt động: " + senderWallet.getStatus());

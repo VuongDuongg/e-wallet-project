@@ -35,6 +35,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -80,6 +81,7 @@ class UserControllerIntegrationTest {
     private MockMvc mockMvc;
 
     private final Map<String, Object> redisStore = new ConcurrentHashMap<>();
+    private final Map<String, Long> redisTtlStore = new ConcurrentHashMap<>();
 
     @BeforeEach
     void setUp() {
@@ -89,6 +91,7 @@ class UserControllerIntegrationTest {
                 .build();
 
         redisStore.clear();
+        redisTtlStore.clear();
 
         @SuppressWarnings("unchecked")
         ValueOperations<String, Object> valueOperations = mock(ValueOperations.class);
@@ -104,7 +107,9 @@ class UserControllerIntegrationTest {
         doAnswer(inv -> {
             String key = inv.getArgument(0);
             Object val = inv.getArgument(1);
+            Duration ttl = inv.getArgument(2);
             redisStore.put(key, val);
+            redisTtlStore.put(key, ttl.getSeconds());
             return null;
         }).when(valueOperations).set(anyString(), any(), any(Duration.class));
 
@@ -116,11 +121,41 @@ class UserControllerIntegrationTest {
         doAnswer(inv -> {
             String key = inv.getArgument(0);
             Object val = inv.getArgument(1);
-            return redisStore.putIfAbsent(key, val) == null;
+            Duration ttl = inv.getArgument(2);
+            boolean absent = redisStore.putIfAbsent(key, val) == null;
+            if (absent) {
+                redisTtlStore.put(key, ttl.getSeconds());
+            }
+            return absent;
         }).when(valueOperations).setIfAbsent(anyString(), any(), any(Duration.class));
 
         doAnswer(inv -> {
             String key = inv.getArgument(0);
+            AtomicLong counter = (AtomicLong) redisStore.computeIfAbsent(key, k -> new AtomicLong(0L));
+            return counter.incrementAndGet();
+        }).when(valueOperations).increment(anyString());
+
+        doAnswer(inv -> {
+            String key = inv.getArgument(0);
+            if (!redisStore.containsKey(key)) {
+                return -2L;
+            }
+            return redisTtlStore.getOrDefault(key, -1L);
+        }).when(redisTemplate).getExpire(anyString());
+
+        doAnswer(inv -> {
+            String key = inv.getArgument(0);
+            Duration ttl = inv.getArgument(1);
+            if (redisStore.containsKey(key)) {
+                redisTtlStore.put(key, ttl.getSeconds());
+                return true;
+            }
+            return false;
+        }).when(redisTemplate).expire(anyString(), any(Duration.class));
+
+        doAnswer(inv -> {
+            String key = inv.getArgument(0);
+            redisTtlStore.remove(key);
             return redisStore.remove(key) != null;
         }).when(redisTemplate).delete(anyString());
 
@@ -139,6 +174,7 @@ class UserControllerIntegrationTest {
 
     private void cleanTestData() {
         redisStore.clear();
+        redisTtlStore.clear();
         ledgerEntryRepository.deleteAll();
         transactionRepository.deleteAll();
         userRepository.findAll().stream()
@@ -323,5 +359,73 @@ class UserControllerIntegrationTest {
                 .andExpect(jsonPath("$.id", is(txId.intValue())))
                 .andExpect(jsonPath("$.amount", is(250000)))
                 .andExpect(jsonPath("$.status", is("COMPLETED")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - Valid +84 phone returns 200 OK with normalized phone and canReceive=true")
+    void lookupUser_validPlus84Phone_returns200Ok() throws Exception {
+        AuthResponse caller = registerUser("0912000010", "Caller User", "Password123!");
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .param("phone", "+84987654321")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phoneNumber", is("0987654321")))
+                .andExpect(jsonPath("$.fullName", is("Tran Thi B")))
+                .andExpect(jsonPath("$.isSelf", is(false)))
+                .andExpect(jsonPath("$.canReceive", is(true)));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - Self phone returns 200 OK with isSelf=true and canReceive=false")
+    void lookupUser_selfPhone_returnsIsSelfTrueAndCanReceiveFalse() throws Exception {
+        AuthResponse caller = registerUser("0912000011", "Self Lookup User", "Password123!");
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .param("phone", "0912000011")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.phoneNumber", is("0912000011")))
+                .andExpect(jsonPath("$.fullName", is("Self Lookup User")))
+                .andExpect(jsonPath("$.isSelf", is(true)))
+                .andExpect(jsonPath("$.canReceive", is(false)));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - System phone 0000000000 returns 400 INVALID_PHONE_FORMAT")
+    void lookupUser_systemPhone0000000000_returns400InvalidPhoneFormat() throws Exception {
+        AuthResponse caller = registerUser("0912000012", "Caller System Phone", "Password123!");
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .param("phone", "0000000000")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("INVALID_PHONE_FORMAT")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - Nonexistent phone returns 404 USER_NOT_FOUND")
+    void lookupUser_nonexistentPhone_returns404UserNotFound() throws Exception {
+        AuthResponse caller = registerUser("0912000013", "Caller Missing Target", "Password123!");
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .param("phone", "0911999888")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errorCode", is("USER_NOT_FOUND")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - Exceeding 30 requests/minute returns 429 RATE_LIMIT_EXCEEDED")
+    void lookupUser_rateLimitExceeded_returns429() throws Exception {
+        AuthResponse caller = registerUser("0912000014", "Caller Rate Limit", "Password123!");
+        redisStore.put("ratelimit:lookup:" + caller.getUserId(), new AtomicLong(30L));
+        redisTtlStore.put("ratelimit:lookup:" + caller.getUserId(), 45L);
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .param("phone", "0987654321")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.errorCode", is("RATE_LIMIT_EXCEEDED")));
     }
 }

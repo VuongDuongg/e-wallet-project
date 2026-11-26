@@ -388,5 +388,95 @@ class TransferServiceTest {
 
             verify(idempotencyService).releaseLock(redisKey);
         }
+
+        @Test
+        @DisplayName("should throw WalletException when attempting P2P transfer to SYSTEM_USER (id=1L)")
+        void transfer_toSystemUserId1_throwsWalletException() {
+            User actualSender = User.builder()
+                    .id(2L)
+                    .phoneNumber("0901234567")
+                    .fullName("Sender User")
+                    .build();
+            Wallet actualSenderWallet = Wallet.builder()
+                    .id(10L)
+                    .user(actualSender)
+                    .balance(1_000_000L)
+                    .currency("VND")
+                    .status(WalletStatus.ACTIVE)
+                    .build();
+            User systemUser = User.builder()
+                    .id(1L)
+                    .phoneNumber("0000000000")
+                    .fullName("SYSTEM_USER")
+                    .build();
+            TransferRequest systemRequest = TransferRequest.builder()
+                    .receiverPhone("0000000000")
+                    .amount(200_000L)
+                    .pin("123456")
+                    .description("To system")
+                    .build();
+            String senderRedisKey = "idemp:transfer:2:" + idempotencyKey;
+
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(senderRedisKey);
+            when(idempotencyService.getReceipt(senderRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(senderRedisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(actualSender);
+            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(actualSenderWallet));
+            when(userService.findByPhoneNumber("0000000000")).thenReturn(systemUser);
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, systemRequest))
+                    .isInstanceOf(WalletException.class);
+
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(userService, never()).verifyPin(any(), any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
+            verify(idempotencyService).releaseLock(senderRedisKey);
+        }
+
+        @Test
+        @DisplayName("should throw WalletException when receiver wallet id is system wallet (id=1L)")
+        void transfer_toSystemWalletId1_throwsWalletException() {
+            User actualSender = User.builder()
+                    .id(2L)
+                    .phoneNumber("0901234567")
+                    .fullName("Sender User")
+                    .build();
+            Wallet actualSenderWallet = Wallet.builder()
+                    .id(10L)
+                    .user(actualSender)
+                    .balance(1_000_000L)
+                    .currency("VND")
+                    .status(WalletStatus.ACTIVE)
+                    .build();
+            User targetUser = User.builder()
+                    .id(3L)
+                    .phoneNumber("0907654321")
+                    .fullName("Target User")
+                    .build();
+            Wallet systemWallet = Wallet.builder()
+                    .id(1L)
+                    .user(targetUser)
+                    .balance(1_000_000L)
+                    .currency("VND")
+                    .status(WalletStatus.ACTIVE)
+                    .build();
+            String senderRedisKey = "idemp:transfer:2:" + idempotencyKey;
+
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(senderRedisKey);
+            when(idempotencyService.getReceipt(senderRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(senderRedisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(actualSender);
+            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(actualSenderWallet));
+            when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(targetUser);
+            when(walletRepository.findByUserId(3L)).thenReturn(Optional.of(systemWallet));
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(WalletException.class);
+
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(userService, never()).verifyPin(any(), any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
+            verify(idempotencyService).releaseLock(senderRedisKey);
+        }
     }
 }
