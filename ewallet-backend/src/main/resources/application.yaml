@@ -54,6 +54,7 @@ vwallet:
     rate-limit-per-minute: 30
   sse:
     max-emitters-per-user: 5
+    timeout-ms: 1800000
   kafka:
     topics:
       transaction-completed: "vwallet.transaction.completed"

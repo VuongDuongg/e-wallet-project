@@ -293,4 +293,23 @@ class TransactionHistoryIntegrationTest {
                 .andExpect(jsonPath("$.content[0].transactionId", is(bSentToA.getId().intValue())))
                 .andExpect(jsonPath("$.content[1].transactionId", is(aSentToB.getId().intValue())));
     }
+
+    @Test
+    @DisplayName("GET /api/v1/transactions - Invalid date range (from > to) or invalid type enum returns 400 BAD_REQUEST")
+    void getHistory_invalidDateRangeOrEnum_returns400BadRequest() throws Exception {
+        AuthResponse auth = registerUser("0913000004", "History Validation User", "Password123!");
+
+        mockMvc.perform(get("/api/v1/transactions")
+                        .param("from", "2026-11-25T00:00:00Z")
+                        .param("to", "2026-11-20T00:00:00Z")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("BAD_REQUEST")));
+
+        mockMvc.perform(get("/api/v1/transactions")
+                        .param("type", "INVALID")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("BAD_REQUEST")));
+    }
 }

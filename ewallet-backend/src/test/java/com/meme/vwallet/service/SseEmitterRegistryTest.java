@@ -5,6 +5,7 @@ import com.meme.vwallet.entity.enums.NotificationType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -119,5 +120,18 @@ class SseEmitterRegistryTest {
                 .doesNotThrowAnyException();
 
         assertThat(registry.getActiveEmitterCount(30L)).isZero();
+    }
+
+    @Test
+    @DisplayName("register uses default 30-minute (1_800_000ms) timeout and respects configured timeout")
+    void register_enforcesConfiguredTimeoutInsteadOfZero() {
+        SseEmitter defaultEmitter = registry.register(40L);
+        assertThat(defaultEmitter.getTimeout()).isEqualTo(1_800_000L);
+        defaultEmitter.complete();
+
+        ReflectionTestUtils.setField(registry, "emitterTimeoutMs", 60_000L);
+        SseEmitter customEmitter = registry.register(41L);
+        assertThat(customEmitter.getTimeout()).isEqualTo(60_000L);
+        customEmitter.complete();
     }
 }

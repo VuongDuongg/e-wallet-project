@@ -7,12 +7,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class GlobalExceptionHandlerPhaseCTest {
 
@@ -106,5 +112,65 @@ class GlobalExceptionHandlerPhaseCTest {
         assertThat(mapped.getTotalPages()).isEqualTo(3);
         assertThat(mapped.isFirst()).isFalse();
         assertThat(mapped.isLast()).isFalse();
+    }
+
+    @Test
+    @DisplayName("handleIllegalArgumentException should return 400 and BAD_REQUEST")
+    void handleIllegalArgumentException() {
+        IllegalArgumentException ex = new IllegalArgumentException("Tham số không hợp lệ");
+        ResponseEntity<ErrorResponse> response = handler.handleIllegalArgumentException(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(400);
+        assertThat(response.getBody().getCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getErrorCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getMessage()).isEqualTo("Tham số không hợp lệ");
+    }
+
+    @Test
+    @DisplayName("handleMethodArgumentTypeMismatch should return 400 and BAD_REQUEST naming parameter")
+    void handleMethodArgumentTypeMismatch() {
+        MethodArgumentTypeMismatchException ex = mock(MethodArgumentTypeMismatchException.class);
+        when(ex.getName()).thenReturn("type");
+
+        ResponseEntity<ErrorResponse> response = handler.handleMethodArgumentTypeMismatch(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(400);
+        assertThat(response.getBody().getCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getErrorCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getMessage()).isEqualTo("Tham số không hợp lệ: type");
+    }
+
+    @Test
+    @DisplayName("handleMissingServletRequestParameter should return 400 and BAD_REQUEST")
+    void handleMissingServletRequestParameter() {
+        MissingServletRequestParameterException ex =
+                new MissingServletRequestParameterException("phone", "String");
+        ResponseEntity<ErrorResponse> response = handler.handleMissingServletRequestParameter(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(400);
+        assertThat(response.getBody().getCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getErrorCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getMessage()).isEqualTo(ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("handleHttpMessageNotReadable should return 400 and BAD_REQUEST")
+    void handleHttpMessageNotReadable() {
+        HttpMessageNotReadableException ex =
+                new HttpMessageNotReadableException("Malformed JSON", mock(HttpInputMessage.class));
+        ResponseEntity<ErrorResponse> response = handler.handleHttpMessageNotReadable(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(400);
+        assertThat(response.getBody().getCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getErrorCode()).isEqualTo("BAD_REQUEST");
+        assertThat(response.getBody().getMessage()).isEqualTo("Dữ liệu JSON không hợp lệ");
     }
 }

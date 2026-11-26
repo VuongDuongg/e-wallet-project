@@ -82,23 +82,29 @@ public class WithdrawalService {
             throw new IdempotencyConflictException("Giao dịch rút tiền đang được xử lý, vui lòng không gửi lại yêu cầu");
         }
 
+        WithdrawalResponse response;
         try {
             validateAmountBounds(request.getAmount());
 
-            WithdrawalResponse response = transactionTemplate.execute(
+            response = transactionTemplate.execute(
                     status -> executeWithdrawTx(userId, idempotencyKey, request)
             );
             if (response == null) {
                 throw new IllegalStateException("Withdrawal transaction returned null response");
             }
-
-            idempotencyService.saveReceipt(redisKey, response, RECEIPT_TTL);
-            return response;
         } catch (Exception e) {
             log.error("Withdrawal failed for userId: {}, error: {}", userId, e.getMessage());
             idempotencyService.releaseLock(redisKey);
             throw e;
         }
+
+        try {
+            idempotencyService.saveReceipt(redisKey, response, RECEIPT_TTL);
+        } catch (Exception ex) {
+            log.warn("Failed to cache withdrawal receipt in Redis after commit for key={}, userId={}: {}",
+                    redisKey, userId, ex.getMessage());
+        }
+        return response;
     }
 
     private void validateAmountBounds(Long amount) {

@@ -428,4 +428,15 @@ class UserControllerIntegrationTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.errorCode", is("RATE_LIMIT_EXCEEDED")));
     }
+
+    @Test
+    @DisplayName("GET /api/v1/users/lookup - Missing phone query parameter returns 400 BAD_REQUEST")
+    void lookupUser_missingPhoneParam_returns400BadRequest() throws Exception {
+        AuthResponse caller = registerUser("0912000015", "Caller Missing Param", "Password123!");
+
+        mockMvc.perform(get("/api/v1/users/lookup")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + caller.getAccessToken()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("BAD_REQUEST")));
+    }
 }

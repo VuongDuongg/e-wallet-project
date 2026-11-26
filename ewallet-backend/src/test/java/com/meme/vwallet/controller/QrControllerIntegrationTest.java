@@ -358,4 +358,22 @@ class QrControllerIntegrationTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.errorCode", is("USER_NOT_FOUND")));
     }
+
+    @Test
+    @DisplayName("POST /api/v1/qr/generate - DYNAMIC QR with amount below min (500) returns 400 BAD_REQUEST")
+    void generate_dynamicOutOfRangeAmount_returns400BadRequest() throws Exception {
+        AuthResponse userA = registerUser("0915000009", "QR Amount Range User");
+
+        QrGenerateRequest generateReq = QrGenerateRequest.builder()
+                .type("DYNAMIC")
+                .amount(500L)
+                .build();
+
+        mockMvc.perform(post("/api/v1/qr/generate")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + userA.getAccessToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(generateReq)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("BAD_REQUEST")));
+    }
 }

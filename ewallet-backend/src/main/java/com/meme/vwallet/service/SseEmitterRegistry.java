@@ -24,6 +24,9 @@ public class SseEmitterRegistry {
     @Value("${vwallet.sse.max-emitters-per-user:5}")
     private int maxEmittersPerUser = 5;
 
+    @Value("${vwallet.sse.timeout-ms:1800000}")
+    private long emitterTimeoutMs = 1_800_000L;
+
     public SseEmitter register(Long userId) {
         if (userId == null) {
             throw new IllegalArgumentException("userId must not be null");
@@ -105,7 +108,7 @@ public class SseEmitterRegistry {
     }
 
     protected SseEmitter createEmitter() {
-        return new SseEmitter(0L);
+        return new SseEmitter(emitterTimeoutMs);
     }
 
     private void removeEmitter(Long userId, SseEmitter emitter) {

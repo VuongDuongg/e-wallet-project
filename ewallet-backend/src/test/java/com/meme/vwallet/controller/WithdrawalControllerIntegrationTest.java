@@ -325,4 +325,26 @@ class WithdrawalControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balanceAfter", is(400000)));
     }
+
+    @Test
+    @DisplayName("POST /api/v1/withdrawals - Out-of-range amount (5000) returns 400 BAD_REQUEST")
+    void withdraw_outOfRangeAmount_returns400BadRequest() throws Exception {
+        AuthResponse auth = registerUserWithPinAndBalance("0914000003", "Out Of Range User", "123456", 500_000L);
+
+        WithdrawalRequest req = WithdrawalRequest.builder()
+                .bankCode("VCB")
+                .bankAccountNumber("1234567890")
+                .accountHolderName("OUT OF RANGE USER")
+                .amount(5_000L)
+                .pin("123456")
+                .build();
+
+        mockMvc.perform(post("/api/v1/withdrawals")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + auth.getAccessToken())
+                        .header("Idempotency-Key", "wd-out-of-range-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode", is("BAD_REQUEST")));
+    }
 }

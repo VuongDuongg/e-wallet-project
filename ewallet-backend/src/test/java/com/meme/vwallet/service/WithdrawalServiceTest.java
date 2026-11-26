@@ -372,4 +372,60 @@ class WithdrawalServiceTest {
         verify(transactionTemplate, never()).execute(any());
         verify(idempotencyService, org.mockito.Mockito.times(2)).releaseLock(redisKey);
     }
+
+    @Test
+    @DisplayName("withdraw - Post-commit saveReceipt Redis failure does not release lock and returns committed response")
+    void withdraw_saveReceiptFailsAfterCommit_doesNotReleaseLockAndReturnsResponse() {
+        when(idempotencyService.formatWithdrawKey(2L, idempotencyKey)).thenReturn(redisKey);
+        when(idempotencyService.getReceipt(redisKey, WithdrawalResponse.class)).thenReturn(Optional.empty());
+        when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+
+        when(userService.findById(2L)).thenReturn(user);
+        when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+        when(walletRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(systemWallet));
+        when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(userWallet));
+
+        Instant now = Instant.now();
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+            Transaction tx = inv.getArgument(0);
+            tx.setId(502L);
+            tx.setCreatedAt(now);
+            return tx;
+        });
+
+        doAnswer(inv -> {
+            Wallet sender = inv.getArgument(1);
+            Wallet receiver = inv.getArgument(2);
+            Long amt = inv.getArgument(3);
+            sender.setBalance(sender.getBalance() - amt);
+            receiver.setBalance(receiver.getBalance() + amt);
+            return null;
+        }).when(ledgerService).executeDoubleEntry(any(Transaction.class), eq(userWallet), eq(systemWallet), eq(200_000L));
+
+        when(withdrawalRepository.save(any(Withdrawal.class))).thenAnswer(inv -> {
+            Withdrawal wd = inv.getArgument(0);
+            wd.setId(78L);
+            wd.setCreatedAt(now);
+            return wd;
+        });
+
+        doThrow(new RuntimeException("Redis down"))
+                .when(idempotencyService).saveReceipt(eq(redisKey), any(WithdrawalResponse.class), eq(Duration.ofHours(24)));
+
+        WithdrawalResponse response = withdrawalService.withdraw(2L, idempotencyKey, request);
+
+        assertThat(response).isNotNull();
+        assertThat(response.isSuccess()).isTrue();
+        assertThat(response.getWithdrawalId()).isEqualTo(78L);
+        assertThat(response.getTransactionId()).isEqualTo(502L);
+        assertThat(response.getBalanceAfter()).isEqualTo(800_000L);
+        assertThat(userWallet.getBalance()).isEqualTo(800_000L);
+        assertThat(systemWallet.getBalance()).isEqualTo(1_000_000_200_000L);
+
+        verify(transactionRepository).save(any(Transaction.class));
+        verify(ledgerService).executeDoubleEntry(any(Transaction.class), eq(userWallet), eq(systemWallet), eq(200_000L));
+        verify(withdrawalRepository).save(any(Withdrawal.class));
+        verify(idempotencyService).saveReceipt(eq(redisKey), any(WithdrawalResponse.class), eq(Duration.ofHours(24)));
+        verify(idempotencyService, never()).releaseLock(any());
+    }
 }
