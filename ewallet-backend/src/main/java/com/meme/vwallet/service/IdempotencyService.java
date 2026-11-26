@@ -28,6 +28,13 @@ public class IdempotencyService {
     }
 
     /**
+     * Formats namespaced Redis idempotency key for cash-out withdrawal.
+     */
+    public String formatWithdrawKey(Long userId, String idempotencyKey) {
+        return "idemp:withdraw:" + userId + ":" + idempotencyKey;
+    }
+
+    /**
      * Acquires a distributed lock with 120s TTL using SETNX.
      *
      * @param key the Redis idempotency key
