@@ -15,6 +15,8 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 
 import java.util.List;
 import java.util.Optional;
@@ -163,6 +165,14 @@ class WalletRepositoryTest {
 
         List<LedgerEntry> entries = ledgerEntryRepository.findByTransactionId(tx.getId());
         assertThat(entries).hasSize(2);
+
+        Optional<Long> sysWalletId = walletRepository.findIdByUserId(1L);
+        assertThat(sysWalletId).contains(1L);
+
+        Page<LedgerEntry> page = ledgerEntryRepository.findByWalletIdOrderByCreatedAtDescIdDesc(
+                sender.getId(), PageRequest.of(0, 10));
+        assertThat(page.getContent()).isNotEmpty();
+        assertThat(page.getContent().get(0).getWalletId()).isEqualTo(sender.getId());
     }
 
     @Test
