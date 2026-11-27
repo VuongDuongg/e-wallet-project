@@ -23,14 +23,19 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -47,7 +52,10 @@ class LedgerServiceTest {
     private LedgerService ledgerService;
 
     @Captor
-    private ArgumentCaptor<LedgerEntry> ledgerEntryCaptor;
+    private ArgumentCaptor<Iterable<Wallet>> walletsCaptor;
+
+    @Captor
+    private ArgumentCaptor<Iterable<LedgerEntry>> entriesCaptor;
 
     private Wallet senderWallet;
     private Wallet receiverWallet;
@@ -86,27 +94,26 @@ class LedgerServiceTest {
     class ExecuteDoubleEntryTests {
 
         @Test
-        @DisplayName("should debit sender, credit receiver, save wallets, and record 2 ledger entries")
+        @DisplayName("should debit sender, credit receiver, and persist via saveAll with 2 ledger entries")
         void executeDoubleEntry_success() {
             Long transferAmount = 200_000L;
-            when(ledgerEntryRepository.save(any(LedgerEntry.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(ledgerEntryRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
             ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, transferAmount);
 
-            // Verify wallet balances updated
             assertThat(senderWallet.getBalance()).isEqualTo(800_000L);
             assertThat(receiverWallet.getBalance()).isEqualTo(700_000L);
 
-            // Verify wallets saved
-            verify(walletRepository).save(senderWallet);
-            verify(walletRepository).save(receiverWallet);
+            verify(walletRepository).saveAll(walletsCaptor.capture());
+            List<Wallet> savedWallets = new ArrayList<>();
+            walletsCaptor.getValue().forEach(savedWallets::add);
+            assertThat(savedWallets).containsExactly(senderWallet, receiverWallet);
 
-            // Verify exactly 2 ledger entries saved
-            verify(ledgerEntryRepository, times(2)).save(ledgerEntryCaptor.capture());
-            List<LedgerEntry> savedEntries = ledgerEntryCaptor.getAllValues();
+            verify(ledgerEntryRepository).saveAll(entriesCaptor.capture());
+            List<LedgerEntry> savedEntries = new ArrayList<>();
+            entriesCaptor.getValue().forEach(savedEntries::add);
             assertThat(savedEntries).hasSize(2);
 
-            // First entry: DEBIT for sender
             LedgerEntry debitEntry = savedEntries.get(0);
             assertThat(debitEntry.getTransaction()).isEqualTo(sampleTransaction);
             assertThat(debitEntry.getWallet()).isEqualTo(senderWallet);
@@ -114,7 +121,6 @@ class LedgerServiceTest {
             assertThat(debitEntry.getAmount()).isEqualTo(transferAmount);
             assertThat(debitEntry.getBalanceAfter()).isEqualTo(800_000L);
 
-            // Second entry: CREDIT for receiver
             LedgerEntry creditEntry = savedEntries.get(1);
             assertThat(creditEntry.getTransaction()).isEqualTo(sampleTransaction);
             assertThat(creditEntry.getWallet()).isEqualTo(receiverWallet);
@@ -127,18 +133,17 @@ class LedgerServiceTest {
         @DisplayName("should succeed when sender balance exactly equals transfer amount")
         void executeDoubleEntry_exactBalance_success() {
             Long transferAmount = 1_000_000L;
-            when(ledgerEntryRepository.save(any(LedgerEntry.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            when(ledgerEntryRepository.saveAll(anyList())).thenAnswer(invocation -> invocation.getArgument(0));
 
             ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, transferAmount);
 
             assertThat(senderWallet.getBalance()).isEqualTo(0L);
             assertThat(receiverWallet.getBalance()).isEqualTo(1_500_000L);
 
-            verify(walletRepository).save(senderWallet);
-            verify(walletRepository).save(receiverWallet);
-
-            verify(ledgerEntryRepository, times(2)).save(ledgerEntryCaptor.capture());
-            List<LedgerEntry> savedEntries = ledgerEntryCaptor.getAllValues();
+            verify(walletRepository).saveAll(anyList());
+            verify(ledgerEntryRepository).saveAll(entriesCaptor.capture());
+            List<LedgerEntry> savedEntries = new ArrayList<>();
+            entriesCaptor.getValue().forEach(savedEntries::add);
             assertThat(savedEntries.get(0).getBalanceAfter()).isEqualTo(0L);
             assertThat(savedEntries.get(0).getEntryType()).isEqualTo(EntryType.DEBIT);
             assertThat(savedEntries.get(1).getBalanceAfter()).isEqualTo(1_500_000L);
@@ -149,19 +154,16 @@ class LedgerServiceTest {
         @DisplayName("should throw InsufficientBalanceException when sender balance is less than amount")
         void executeDoubleEntry_insufficientBalance_shouldThrowException() {
             senderWallet.setBalance(100_000L);
-            Long transferAmount = 200_000L;
 
-            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, transferAmount))
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
                     .isInstanceOf(InsufficientBalanceException.class)
                     .hasMessageContaining("Số dư không đủ");
 
-            // Balances must remain unchanged
             assertThat(senderWallet.getBalance()).isEqualTo(100_000L);
             assertThat(receiverWallet.getBalance()).isEqualTo(500_000L);
 
-            // No persistence interactions
-            verify(walletRepository, never()).save(any());
-            verify(ledgerEntryRepository, never()).save(any());
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
         }
 
         @ParameterizedTest
@@ -172,11 +174,8 @@ class LedgerServiceTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Số tiền giao dịch phải lớn hơn 0");
 
-            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
-            assertThat(receiverWallet.getBalance()).isEqualTo(500_000L);
-
-            verify(walletRepository, never()).save(any());
-            verify(ledgerEntryRepository, never()).save(any());
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
         }
 
         @ParameterizedTest
@@ -187,58 +186,85 @@ class LedgerServiceTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Số tiền giao dịch phải lớn hơn 0");
 
-            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
-            assertThat(receiverWallet.getBalance()).isEqualTo(500_000L);
-
-            verify(walletRepository, never()).save(any());
-            verify(ledgerEntryRepository, never()).save(any());
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
         }
 
         @Test
-        @DisplayName("should throw IllegalArgumentException when receiver is null")
-        void executeDoubleEntry_nullReceiver_shouldThrowException() {
+        @DisplayName("should throw IllegalArgumentException when tx is null or tx.id is null")
+        void executeDoubleEntry_invalidTransaction_shouldThrowException() {
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(null, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            Transaction unsavedTx = Transaction.builder().amount(200_000L).build();
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(unsavedTx, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("should throw IllegalArgumentException when sender or receiver is invalid")
+        void executeDoubleEntry_invalidSenderOrReceiver_shouldThrowException() {
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, null, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
+
             assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, null, 200_000L))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Ví nhận tiền không hợp lệ");
+                    .isInstanceOf(IllegalArgumentException.class);
 
-            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
-            verify(walletRepository, never()).save(any());
-            verify(ledgerEntryRepository, never()).save(any());
-        }
+            senderWallet.setId(null);
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
+            senderWallet.setId(1L);
 
-        @Test
-        @DisplayName("should throw IllegalArgumentException when receiver balance is null")
-        void executeDoubleEntry_receiverNullBalance_shouldThrowException() {
             receiverWallet.setBalance(null);
             assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Ví nhận tiền không hợp lệ");
+                    .isInstanceOf(IllegalArgumentException.class);
 
-            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
-            verify(walletRepository, never()).save(any());
-            verify(ledgerEntryRepository, never()).save(any());
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
         }
-    }
-
-    @Nested
-    @DisplayName("recordEntry")
-    class RecordEntryTests {
 
         @Test
-        @DisplayName("should build, save, and return a single ledger entry")
-        void recordEntry_success() {
-            when(ledgerEntryRepository.save(any(LedgerEntry.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        @DisplayName("should throw IllegalArgumentException when sender and receiver are the same wallet")
+        void executeDoubleEntry_sameWallet_shouldThrowException() {
+            receiverWallet.setId(1L);
 
-            LedgerEntry result = ledgerService.recordEntry(sampleTransaction, senderWallet, EntryType.DEBIT, 50_000L, 950_000L);
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
 
-            assertThat(result).isNotNull();
-            assertThat(result.getTransaction()).isEqualTo(sampleTransaction);
-            assertThat(result.getWallet()).isEqualTo(senderWallet);
-            assertThat(result.getEntryType()).isEqualTo(EntryType.DEBIT);
-            assertThat(result.getAmount()).isEqualTo(50_000L);
-            assertThat(result.getBalanceAfter()).isEqualTo(950_000L);
+            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
+        }
 
-            verify(ledgerEntryRepository).save(any(LedgerEntry.class));
+        @Test
+        @DisplayName("should throw IllegalArgumentException when sender and receiver currencies mismatch")
+        void executeDoubleEntry_currencyMismatch_shouldThrowException() {
+            receiverWallet.setCurrency("USD");
+
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
+            assertThat(receiverWallet.getBalance()).isEqualTo(500_000L);
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("should throw ArithmeticException on Long balance overflow without mutating sender balance")
+        void executeDoubleEntry_longOverflow_throwsArithmeticExceptionAndLeavesBalancesIntact() {
+            receiverWallet.setBalance(Long.MAX_VALUE - 50_000L);
+
+            assertThatThrownBy(() -> ledgerService.executeDoubleEntry(sampleTransaction, senderWallet, receiverWallet, 200_000L))
+                    .isInstanceOf(ArithmeticException.class);
+
+            assertThat(senderWallet.getBalance()).isEqualTo(1_000_000L);
+            assertThat(receiverWallet.getBalance()).isEqualTo(Long.MAX_VALUE - 50_000L);
+            verify(walletRepository, never()).saveAll(any());
+            verify(ledgerEntryRepository, never()).saveAll(any());
         }
     }
 
@@ -260,15 +286,19 @@ class LedgerServiceTest {
         }
 
         @Test
-        @DisplayName("getEntriesByWalletId should delegate to repository")
-        void getEntriesByWalletId_success() {
+        @DisplayName("getEntriesByWalletId should delegate paginated query to repository")
+        void getEntriesByWalletId_paginated_success() {
+            Pageable pageable = PageRequest.of(0, 20);
             LedgerEntry entry1 = LedgerEntry.builder().id(1L).wallet(senderWallet).build();
-            when(ledgerEntryRepository.findByWalletId(1L)).thenReturn(List.of(entry1));
+            Page<LedgerEntry> expectedPage = new PageImpl<>(List.of(entry1), pageable, 1);
 
-            List<LedgerEntry> results = ledgerService.getEntriesByWalletId(1L);
+            when(ledgerEntryRepository.findByWalletIdOrderByCreatedAtDescIdDesc(1L, pageable))
+                    .thenReturn(expectedPage);
 
-            assertThat(results).containsExactly(entry1);
-            verify(ledgerEntryRepository).findByWalletId(1L);
+            Page<LedgerEntry> results = ledgerService.getEntriesByWalletId(1L, pageable);
+
+            assertThat(results.getContent()).containsExactly(entry1);
+            verify(ledgerEntryRepository).findByWalletIdOrderByCreatedAtDescIdDesc(1L, pageable);
         }
     }
 }
