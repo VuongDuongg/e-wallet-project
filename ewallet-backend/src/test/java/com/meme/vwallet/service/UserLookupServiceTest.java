@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.user.UserLookupService;
+
 import com.meme.vwallet.dto.response.UserLookupResponse;
 import com.meme.vwallet.entity.User;
 import com.meme.vwallet.entity.Wallet;

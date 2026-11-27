@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.idempotency.IdempotencyService;
+
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

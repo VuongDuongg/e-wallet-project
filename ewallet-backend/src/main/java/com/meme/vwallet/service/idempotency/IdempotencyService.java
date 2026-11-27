@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.idempotency;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

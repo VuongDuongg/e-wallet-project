@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.ledger;
 
 import com.meme.vwallet.entity.LedgerEntry;
 import com.meme.vwallet.entity.Transaction;

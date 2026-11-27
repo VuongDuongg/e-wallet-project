@@ -3,7 +3,7 @@ package com.meme.vwallet.integration;
 import com.meme.vwallet.entity.Transaction;
 import com.meme.vwallet.entity.Wallet;
 import com.meme.vwallet.repository.WalletRepository;
-import com.meme.vwallet.service.LedgerService;
+import com.meme.vwallet.service.ledger.LedgerService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

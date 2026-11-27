@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.auth;
 
 import com.meme.vwallet.dto.request.LoginRequest;
 import com.meme.vwallet.dto.request.RefreshTokenRequest;

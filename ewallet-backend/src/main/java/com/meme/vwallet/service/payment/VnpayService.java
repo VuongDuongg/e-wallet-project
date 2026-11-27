@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.payment;
 
 import lombok.Getter;
 import lombok.Setter;

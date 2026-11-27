@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.notification.SseEmitterRegistry;
+
 import com.meme.vwallet.dto.response.NotificationResponse;
 import com.meme.vwallet.entity.enums.NotificationType;
 import org.junit.jupiter.api.BeforeEach;

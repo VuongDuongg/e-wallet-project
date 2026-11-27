@@ -11,7 +11,7 @@ import com.meme.vwallet.exception.PinNotSetException;
 import com.meme.vwallet.exception.UserNotFoundException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
-import com.meme.vwallet.service.TransferService;
+import com.meme.vwallet.service.transfer.TransferService;
 import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

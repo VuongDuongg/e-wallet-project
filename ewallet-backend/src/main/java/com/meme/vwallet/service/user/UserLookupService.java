@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.user;
 
 import com.meme.vwallet.dto.response.UserLookupResponse;
 import com.meme.vwallet.entity.User;

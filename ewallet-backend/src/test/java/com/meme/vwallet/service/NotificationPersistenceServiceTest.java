@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.notification.NotificationPersistenceService;
+
 import com.meme.vwallet.dto.response.NotificationResponse;
 import com.meme.vwallet.entity.Notification;
 import com.meme.vwallet.entity.Transaction;

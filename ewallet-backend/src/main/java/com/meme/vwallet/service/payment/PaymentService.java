@@ -1,4 +1,7 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.payment;
+
+import com.meme.vwallet.service.ledger.LedgerService;
+import com.meme.vwallet.service.user.UserService;
 
 import com.meme.vwallet.dto.request.TopupRequest;
 import com.meme.vwallet.dto.response.TopupResponse;

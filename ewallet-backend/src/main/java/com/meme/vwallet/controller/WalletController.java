@@ -2,7 +2,7 @@ package com.meme.vwallet.controller;
 
 import com.meme.vwallet.dto.response.WalletResponse;
 import com.meme.vwallet.security.CurrentUser;
-import com.meme.vwallet.service.PaymentService;
+import com.meme.vwallet.service.payment.PaymentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
