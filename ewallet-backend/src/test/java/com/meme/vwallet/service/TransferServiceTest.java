@@ -12,9 +12,11 @@ import com.meme.vwallet.event.TransactionCompletedEvent;
 import com.meme.vwallet.exception.IdempotencyConflictException;
 import com.meme.vwallet.exception.InsufficientBalanceException;
 import com.meme.vwallet.exception.InvalidPinException;
+import com.meme.vwallet.exception.UserLockedException;
 import com.meme.vwallet.exception.WalletException;
 import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.WalletRepository;
+import org.apache.commons.codec.digest.DigestUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -26,6 +28,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -35,14 +40,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class TransferServiceTest {
+
+    @Mock
+    private TransactionTemplate transactionTemplate;
 
     @Mock
     private WalletRepository walletRepository;
@@ -72,19 +82,27 @@ class TransferServiceTest {
     private TransferRequest request;
     private String idempotencyKey;
     private String redisKey;
+    private String hashedDbKey;
 
     @BeforeEach
     void setUp() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(new SimpleTransactionStatus());
+        });
+
         senderUser = User.builder()
-                .id(1L)
+                .id(2L)
                 .phoneNumber("0901234567")
                 .fullName("Sender User")
+                .status("ACTIVE")
                 .build();
 
         receiverUser = User.builder()
-                .id(2L)
+                .id(3L)
                 .phoneNumber("0907654321")
                 .fullName("Receiver User")
+                .status("ACTIVE")
                 .build();
 
         senderWallet = Wallet.builder()
@@ -111,7 +129,8 @@ class TransferServiceTest {
                 .build();
 
         idempotencyKey = "req-idemp-123";
-        redisKey = "idemp:transfer:1:req-idemp-123";
+        redisKey = "idemp:transfer:2:req-idemp-123";
+        hashedDbKey = DigestUtils.sha256Hex("P2P:2:" + idempotencyKey);
     }
 
     @Nested
@@ -119,35 +138,34 @@ class TransferServiceTest {
     class HappyPathAndCachingTests {
 
         @Test
-        @DisplayName("Test 1: Successful transfer debits sender, credits receiver, creates 2 ledger entries, records completed transaction, caches response in Redis")
+        @DisplayName("Test 1: Successful transfer uses scalar wallet ID lookup, hashes idempotency key, locks min->max, debits/credits, and caches receipt")
         void transfer_success() {
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
-            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
-            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            String longKey = "req-" + "x".repeat(120);
+            String longRedisKey = "idemp:transfer:2:" + longKey;
+            String expectedHashedKey = DigestUtils.sha256Hex("P2P:2:" + longKey);
 
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(idempotencyService.formatTransferKey(2L, longKey)).thenReturn(longRedisKey);
+            when(idempotencyService.getReceipt(longRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(longRedisKey)).thenReturn(true);
+
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(expectedHashedKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
 
             when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
             when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
 
             Instant now = Instant.now();
-            Transaction savedTx = Transaction.builder()
-                    .id(100L)
-                    .idempotencyKey(idempotencyKey)
-                    .senderWallet(senderWallet)
-                    .receiverWallet(receiverWallet)
-                    .amount(200_000L)
-                    .type(TransactionType.P2P_TRANSFER)
-                    .status(TransactionStatus.COMPLETED)
-                    .description("Chuyen tien an trua")
-                    .createdAt(now)
-                    .build();
-            when(transactionRepository.save(any(Transaction.class))).thenReturn(savedTx);
+            when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+                Transaction tx = inv.getArgument(0);
+                tx.setId(100L);
+                tx.setCreatedAt(now);
+                return tx;
+            });
 
-            TransferResponse response = transferService.transfer(1L, idempotencyKey, request);
+            TransferResponse response = transferService.transfer(2L, longKey, request);
 
             assertThat(response).isNotNull();
             assertThat(response.isSuccess()).isTrue();
@@ -158,38 +176,40 @@ class TransferServiceTest {
             assertThat(response.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
             assertThat(response.getCreatedAt()).isEqualTo(now);
 
-            // Verify PIN was verified
-            verify(userService).verifyPin(1L, "123456");
+            verify(walletRepository).findIdByUserId(2L);
+            verify(walletRepository).findIdByUserId(3L);
+            verify(walletRepository, never()).findByUserId(any());
 
-            // Verify lock acquisition order min(10, 20) -> max(10, 20)
+            verify(userService).verifyPin(2L, "123456");
+
             InOrder inOrder = inOrder(walletRepository);
             inOrder.verify(walletRepository).findByIdForUpdate(10L);
             inOrder.verify(walletRepository).findByIdForUpdate(20L);
 
-            // Verify ledger double entry called
+            ArgumentCaptor<Transaction> txCaptor = ArgumentCaptor.forClass(Transaction.class);
+            verify(transactionRepository).save(txCaptor.capture());
+            assertThat(txCaptor.getValue().getIdempotencyKey()).hasSize(64);
+            assertThat(txCaptor.getValue().getIdempotencyKey()).isEqualTo(expectedHashedKey);
+
             verify(ledgerService).executeDoubleEntry(any(Transaction.class), eq(senderWallet), eq(receiverWallet), eq(200_000L));
 
-            // Verify TransactionCompletedEvent published
             ArgumentCaptor<TransactionCompletedEvent> eventCaptor = ArgumentCaptor.forClass(TransactionCompletedEvent.class);
             verify(eventPublisher).publishEvent(eventCaptor.capture());
             TransactionCompletedEvent event = eventCaptor.getValue();
             assertThat(event.getEventId()).isNotBlank();
             assertThat(event.getTransactionId()).isEqualTo(100L);
             assertThat(event.getTransactionType()).isEqualTo(TransactionType.P2P_TRANSFER);
-            assertThat(event.getSenderUserId()).isEqualTo(1L);
+            assertThat(event.getSenderUserId()).isEqualTo(2L);
             assertThat(event.getSenderPhone()).isEqualTo("0901234567");
             assertThat(event.getSenderName()).isEqualTo("Sender User");
-            assertThat(event.getReceiverUserId()).isEqualTo(2L);
+            assertThat(event.getReceiverUserId()).isEqualTo(3L);
             assertThat(event.getReceiverPhone()).isEqualTo("0907654321");
             assertThat(event.getReceiverName()).isEqualTo("Receiver User");
             assertThat(event.getAmount()).isEqualTo(200_000L);
             assertThat(event.getDescription()).isEqualTo("Chuyen tien an trua");
             assertThat(event.getOccurredAt()).isEqualTo(now);
 
-            // Verify receipt saved with 24 hours TTL
-            verify(idempotencyService).saveReceipt(eq(redisKey), any(TransferResponse.class), eq(Duration.ofHours(24)));
-
-            // Verify lock was NOT released (it stays as receipt)
+            verify(idempotencyService).saveReceipt(eq(longRedisKey), any(TransferResponse.class), eq(Duration.ofHours(24)));
             verify(idempotencyService, never()).releaseLock(any());
         }
 
@@ -199,41 +219,40 @@ class TransferServiceTest {
             senderWallet.setId(50L);
             receiverWallet.setId(15L);
 
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
 
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(50L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(15L));
 
             when(walletRepository.findByIdForUpdate(15L)).thenReturn(Optional.of(receiverWallet));
             when(walletRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(senderWallet));
 
-            Transaction savedTx = Transaction.builder()
-                    .id(101L)
-                    .idempotencyKey(idempotencyKey)
-                    .senderWallet(senderWallet)
-                    .receiverWallet(receiverWallet)
-                    .amount(200_000L)
-                    .type(TransactionType.P2P_TRANSFER)
-                    .status(TransactionStatus.COMPLETED)
-                    .build();
-            when(transactionRepository.save(any(Transaction.class))).thenReturn(savedTx);
+            when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+                Transaction tx = inv.getArgument(0);
+                tx.setId(101L);
+                return tx;
+            });
 
-            TransferResponse response = transferService.transfer(1L, idempotencyKey, request);
+            TransferResponse response = transferService.transfer(2L, idempotencyKey, request);
 
             assertThat(response).isNotNull();
             assertThat(response.isSuccess()).isTrue();
+            assertThat(response.getCreatedAt()).isNotNull();
 
-            // Verify lock acquisition order was min(15) then max(50)
             InOrder inOrder = inOrder(walletRepository);
             inOrder.verify(walletRepository).findByIdForUpdate(15L);
             inOrder.verify(walletRepository).findByIdForUpdate(50L);
 
-            // Double entry still has sender=senderWallet, receiver=receiverWallet
             verify(ledgerService).executeDoubleEntry(any(Transaction.class), eq(senderWallet), eq(receiverWallet), eq(200_000L));
+
+            ArgumentCaptor<TransactionCompletedEvent> eventCaptor = ArgumentCaptor.forClass(TransactionCompletedEvent.class);
+            verify(eventPublisher).publishEvent(eventCaptor.capture());
+            assertThat(response.getCreatedAt()).isEqualTo(eventCaptor.getValue().getOccurredAt());
         }
 
         @Test
@@ -249,16 +268,17 @@ class TransferServiceTest {
                     .createdAt(Instant.now())
                     .build();
 
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.of(cachedResponse));
 
-            TransferResponse response = transferService.transfer(1L, idempotencyKey, request);
+            TransferResponse response = transferService.transfer(2L, idempotencyKey, request);
 
             assertThat(response).isEqualTo(cachedResponse);
 
             verify(idempotencyService, never()).acquireLock(any());
+            verify(transactionTemplate, never()).execute(any());
             verify(userService, never()).findById(any());
-            verify(walletRepository, never()).findByUserId(any());
+            verify(walletRepository, never()).findIdByUserId(any());
             verify(walletRepository, never()).findByIdForUpdate(any());
             verify(transactionRepository, never()).save(any());
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
@@ -266,95 +286,288 @@ class TransferServiceTest {
         }
 
         @Test
+        @DisplayName("DB idempotency fallback returns existing COMPLETED transaction when Redis receipt cache is missing")
+        void transfer_dbFallback_returnsExistingTransactionWithoutDuplicateMutation() {
+            Instant created = Instant.now().minusSeconds(3600);
+            Transaction existingTx = Transaction.builder()
+                    .id(888L)
+                    .idempotencyKey(hashedDbKey)
+                    .senderWallet(senderWallet)
+                    .receiverWallet(receiverWallet)
+                    .amount(200_000L)
+                    .type(TransactionType.P2P_TRANSFER)
+                    .status(TransactionStatus.COMPLETED)
+                    .createdAt(created)
+                    .build();
+
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.of(existingTx));
+
+            TransferResponse response = transferService.transfer(2L, idempotencyKey, request);
+
+            assertThat(response.isSuccess()).isTrue();
+            assertThat(response.getTransactionId()).isEqualTo(888L);
+            assertThat(response.getSenderWalletId()).isEqualTo(10L);
+            assertThat(response.getReceiverWalletId()).isEqualTo(20L);
+            assertThat(response.getAmount()).isEqualTo(200_000L);
+            assertThat(response.getStatus()).isEqualTo(TransactionStatus.COMPLETED);
+            assertThat(response.getCreatedAt()).isEqualTo(created);
+
+            verify(userService, never()).verifyPin(any(), any());
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(transactionRepository, never()).save(any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(idempotencyService).saveReceipt(eq(redisKey), eq(response), eq(Duration.ofHours(24)));
+            verify(idempotencyService, never()).releaseLock(any());
+        }
+
+        @Test
+        @DisplayName("Post-commit Redis saveReceipt failure does not release lock and returns committed TransferResponse")
+        void transfer_saveReceiptFailsAfterCommit_doesNotReleaseLockAndReturnsResponse() {
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
+            when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
+            when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
+            when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
+
+            Instant now = Instant.now();
+            when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+                Transaction tx = inv.getArgument(0);
+                tx.setId(777L);
+                tx.setCreatedAt(now);
+                return tx;
+            });
+
+            doThrow(new RuntimeException("Redis down"))
+                    .when(idempotencyService).saveReceipt(eq(redisKey), any(TransferResponse.class), eq(Duration.ofHours(24)));
+
+            TransferResponse response = transferService.transfer(2L, idempotencyKey, request);
+
+            assertThat(response).isNotNull();
+            assertThat(response.isSuccess()).isTrue();
+            assertThat(response.getTransactionId()).isEqualTo(777L);
+            verify(ledgerService).executeDoubleEntry(any(Transaction.class), eq(senderWallet), eq(receiverWallet), eq(200_000L));
+            verify(idempotencyService, never()).releaseLock(any());
+        }
+
+        @Test
         @DisplayName("Idempotency conflict throws IdempotencyConflictException when lock cannot be acquired")
         void transfer_lockConflict_throwsIdempotencyConflictException() {
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(false);
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(IdempotencyConflictException.class);
 
+            verify(transactionTemplate, never()).execute(any());
             verify(userService, never()).findById(any());
             verify(walletRepository, never()).findByIdForUpdate(any());
         }
     }
 
     @Nested
-    @DisplayName("transfer - validation and error handling")
+    @DisplayName("transfer - validation and security hardening")
     class ValidationAndErrorHandlingTests {
 
         @Test
-        @DisplayName("Test 2: Self-transfer attempt (senderWallet.getId().equals(receiverWallet.getId())) throws WalletException before lock acquisition and releases lock")
-        void transfer_selfTransfer_throwsWalletExceptionAndReleasesLock() {
-            receiverWallet.setId(10L); // Same wallet id as sender
+        @DisplayName("Blank idempotencyKey, null request, or non-positive amount throws IllegalArgumentException before touching Redis or DB")
+        void transfer_invalidInputs_throwsIllegalArgumentException() {
+            assertThatThrownBy(() -> transferService.transfer(2L, "   ", request))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, null))
+                    .isInstanceOf(IllegalArgumentException.class);
 
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            request.setAmount(0L);
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            verify(idempotencyService, never()).acquireLock(any());
+            verify(transactionTemplate, never()).execute(any());
+        }
+
+        @Test
+        @DisplayName("DB idempotency fallback rejects mismatched sender wallet with IdempotencyConflictException")
+        void transfer_dbFallbackDifferentSender_throwsIdempotencyConflict() {
+            Transaction otherTx = Transaction.builder()
+                    .id(999L)
+                    .idempotencyKey(hashedDbKey)
+                    .senderWallet(receiverWallet)
+                    .receiverWallet(senderWallet)
+                    .amount(200_000L)
+                    .type(TransactionType.P2P_TRANSFER)
+                    .status(TransactionStatus.COMPLETED)
+                    .build();
+
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.of(otherTx));
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(IdempotencyConflictException.class);
+
+            verify(idempotencyService).releaseLock(redisKey);
+        }
+
+        @Test
+        @DisplayName("Locked sender user throws UserLockedException and releases lock")
+        void transfer_lockedSenderUser_throwsUserLockedException() {
+            senderUser.setStatus("LOCKED");
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(UserLockedException.class);
+
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(userService, never()).verifyPin(any(), any());
+            verify(idempotencyService).releaseLock(redisKey);
+        }
+
+        @Test
+        @DisplayName("Locked receiver user throws WalletException (400, not 403 USER_LOCKED) and releases lock")
+        void transfer_lockedReceiverUser_throwsWalletException() {
+            receiverUser.setStatus("LOCKED");
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
+            when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(WalletException.class);
+
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(userService, never()).verifyPin(any(), any());
+            verify(idempotencyService).releaseLock(redisKey);
+        }
+
+        @Test
+        @DisplayName("Sender being system user or system wallet throws WalletException and releases lock")
+        void transfer_fromSystemUserOrWallet_throwsWalletException() {
+            senderUser.setId(1L);
+            String sysRedisKey = "idemp:transfer:1:" + idempotencyKey;
+            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(sysRedisKey);
+            when(idempotencyService.getReceipt(sysRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(sysRedisKey)).thenReturn(true);
+            when(userService.findById(1L)).thenReturn(senderUser);
+
+            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+                    .isInstanceOf(WalletException.class);
+
+            verify(walletRepository, never()).findByIdForUpdate(any());
+            verify(idempotencyService).releaseLock(sysRedisKey);
+        }
+
+        @Test
+        @DisplayName("Test 2: Self-transfer attempt throws WalletException before lock acquisition and releases lock")
+        void transfer_selfTransfer_throwsWalletExceptionAndReleasesLock() {
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
 
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(10L));
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(WalletException.class)
                     .hasMessageContaining("Không thể tự chuyển tiền cho chính mình");
 
-            // Verify no pessimistic lock was acquired
             verify(walletRepository, never()).findByIdForUpdate(any());
-            // Verify PIN was not verified
             verify(userService, never()).verifyPin(any(), any());
-            // Verify idempotency lock was released
             verify(idempotencyService).releaseLock(redisKey);
         }
 
         @Test
         @DisplayName("Test 3: Invalid PIN throws InvalidPinException and releases idempotency lock")
         void transfer_invalidPin_throwsInvalidPinExceptionAndReleasesLock() {
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
 
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
 
-            doThrow(new InvalidPinException("Invalid PIN")).when(userService).verifyPin(1L, "123456");
+            doThrow(new InvalidPinException("Invalid PIN")).when(userService).verifyPin(2L, "123456");
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(InvalidPinException.class)
                     .hasMessageContaining("Invalid PIN");
 
-            // Verify no pessimistic lock was acquired
             verify(walletRepository, never()).findByIdForUpdate(any());
-            // Verify idempotency lock was released
             verify(idempotencyService).releaseLock(redisKey);
-            // Verify no receipt saved
             verify(idempotencyService, never()).saveReceipt(any(), any(), any());
             verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
-        @DisplayName("Test 4: Insufficient balance throws InsufficientBalanceException and releases idempotency lock")
-        void transfer_insufficientBalance_throwsInsufficientBalanceExceptionAndReleasesLock() {
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+        @DisplayName("Insufficient sender balance fails before creating Transaction record and releases lock")
+        void transfer_insufficientBalancePreCheck_failsBeforeTransactionSave() {
+            senderWallet.setBalance(50_000L);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
 
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
+            when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
+            when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
+
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
+                    .isInstanceOf(InsufficientBalanceException.class)
+                    .hasMessageContaining("Số dư không đủ");
+
+            verify(transactionRepository, never()).save(any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
+            verify(eventPublisher, never()).publishEvent(any());
+            verify(idempotencyService).releaseLock(redisKey);
+        }
+
+        @Test
+        @DisplayName("Test 4: LedgerService InsufficientBalanceException rolls back and releases idempotency lock")
+        void transfer_insufficientBalance_throwsInsufficientBalanceExceptionAndReleasesLock() {
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
+            when(userService.findByPhoneNumber("0907654321")).thenReturn(receiverUser);
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
 
             when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
             when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
 
             Transaction savedTx = Transaction.builder()
                     .id(100L)
-                    .idempotencyKey(idempotencyKey)
+                    .idempotencyKey(hashedDbKey)
                     .senderWallet(senderWallet)
                     .receiverWallet(receiverWallet)
                     .amount(200_000L)
@@ -366,74 +579,71 @@ class TransferServiceTest {
             doThrow(new InsufficientBalanceException("Số dư không đủ để thực hiện giao dịch"))
                     .when(ledgerService).executeDoubleEntry(any(Transaction.class), eq(senderWallet), eq(receiverWallet), eq(200_000L));
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(InsufficientBalanceException.class)
                     .hasMessageContaining("Số dư không đủ");
 
-            // Verify idempotency lock was released
             verify(idempotencyService).releaseLock(redisKey);
-            // Verify no receipt saved
             verify(idempotencyService, never()).saveReceipt(any(), any(), any());
             verify(eventPublisher, never()).publishEvent(any());
         }
 
         @Test
-        @DisplayName("should throw WalletException when sender wallet is not active")
-        void shouldThrowWhenSenderWalletNotActive() {
+        @DisplayName("TOCTOU check: should throw WalletException using lockedSender status after FOR UPDATE")
+        void shouldThrowWhenSenderWalletNotActiveAfterLock() {
             senderWallet.setStatus(WalletStatus.LOCKED);
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
+            when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
+            when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(WalletException.class)
                     .hasMessageContaining("Ví người gửi không ở trạng thái hoạt động");
 
+            verify(transactionRepository, never()).save(any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
             verify(idempotencyService).releaseLock(redisKey);
         }
 
         @Test
-        @DisplayName("should throw WalletException when receiver wallet is not active")
-        void shouldThrowWhenReceiverWalletNotActive() {
+        @DisplayName("TOCTOU check: should throw WalletException using lockedReceiver status after FOR UPDATE")
+        void shouldThrowWhenReceiverWalletNotActiveAfterLock() {
             receiverWallet.setStatus(WalletStatus.CLOSED);
-            when(idempotencyService.formatTransferKey(1L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
             when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
             when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
-            when(userService.findById(1L)).thenReturn(senderUser);
-            when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(senderWallet));
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(receiverUser);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(receiverWallet));
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(20L));
+            when(walletRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(senderWallet));
+            when(walletRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(receiverWallet));
 
-            assertThatThrownBy(() -> transferService.transfer(1L, idempotencyKey, request))
+            assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(WalletException.class)
                     .hasMessageContaining("Ví người nhận không ở trạng thái hoạt động");
 
+            verify(transactionRepository, never()).save(any());
+            verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
             verify(idempotencyService).releaseLock(redisKey);
         }
 
         @Test
         @DisplayName("should throw WalletException when attempting P2P transfer to SYSTEM_USER (id=1L)")
         void transfer_toSystemUserId1_throwsWalletException() {
-            User actualSender = User.builder()
-                    .id(2L)
-                    .phoneNumber("0901234567")
-                    .fullName("Sender User")
-                    .build();
-            Wallet actualSenderWallet = Wallet.builder()
-                    .id(10L)
-                    .user(actualSender)
-                    .balance(1_000_000L)
-                    .currency("VND")
-                    .status(WalletStatus.ACTIVE)
-                    .build();
             User systemUser = User.builder()
                     .id(1L)
                     .phoneNumber("0000000000")
                     .fullName("SYSTEM_USER")
+                    .status("ACTIVE")
                     .build();
             TransferRequest systemRequest = TransferRequest.builder()
                     .receiverPhone("0000000000")
@@ -441,13 +651,13 @@ class TransferServiceTest {
                     .pin("123456")
                     .description("To system")
                     .build();
-            String senderRedisKey = "idemp:transfer:2:" + idempotencyKey;
 
-            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(senderRedisKey);
-            when(idempotencyService.getReceipt(senderRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
-            when(idempotencyService.acquireLock(senderRedisKey)).thenReturn(true);
-            when(userService.findById(2L)).thenReturn(actualSender);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(actualSenderWallet));
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
             when(userService.findByPhoneNumber("0000000000")).thenReturn(systemUser);
 
             assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, systemRequest))
@@ -456,45 +666,20 @@ class TransferServiceTest {
             verify(walletRepository, never()).findByIdForUpdate(any());
             verify(userService, never()).verifyPin(any(), any());
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
-            verify(idempotencyService).releaseLock(senderRedisKey);
+            verify(idempotencyService).releaseLock(redisKey);
         }
 
         @Test
         @DisplayName("should throw WalletException when receiver wallet id is system wallet (id=1L)")
         void transfer_toSystemWalletId1_throwsWalletException() {
-            User actualSender = User.builder()
-                    .id(2L)
-                    .phoneNumber("0901234567")
-                    .fullName("Sender User")
-                    .build();
-            Wallet actualSenderWallet = Wallet.builder()
-                    .id(10L)
-                    .user(actualSender)
-                    .balance(1_000_000L)
-                    .currency("VND")
-                    .status(WalletStatus.ACTIVE)
-                    .build();
-            User targetUser = User.builder()
-                    .id(3L)
-                    .phoneNumber("0907654321")
-                    .fullName("Target User")
-                    .build();
-            Wallet systemWallet = Wallet.builder()
-                    .id(1L)
-                    .user(targetUser)
-                    .balance(1_000_000L)
-                    .currency("VND")
-                    .status(WalletStatus.ACTIVE)
-                    .build();
-            String senderRedisKey = "idemp:transfer:2:" + idempotencyKey;
-
-            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(senderRedisKey);
-            when(idempotencyService.getReceipt(senderRedisKey, TransferResponse.class)).thenReturn(Optional.empty());
-            when(idempotencyService.acquireLock(senderRedisKey)).thenReturn(true);
-            when(userService.findById(2L)).thenReturn(actualSender);
-            when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(actualSenderWallet));
-            when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(targetUser);
-            when(walletRepository.findByUserId(3L)).thenReturn(Optional.of(systemWallet));
+            when(idempotencyService.formatTransferKey(2L, idempotencyKey)).thenReturn(redisKey);
+            when(idempotencyService.getReceipt(redisKey, TransferResponse.class)).thenReturn(Optional.empty());
+            when(idempotencyService.acquireLock(redisKey)).thenReturn(true);
+            when(userService.findById(2L)).thenReturn(senderUser);
+            when(walletRepository.findIdByUserId(2L)).thenReturn(Optional.of(10L));
+            when(transactionRepository.findByIdempotencyKey(hashedDbKey)).thenReturn(Optional.empty());
+            when(userService.findByPhoneNumber(request.getReceiverPhone())).thenReturn(receiverUser);
+            when(walletRepository.findIdByUserId(3L)).thenReturn(Optional.of(1L));
 
             assertThatThrownBy(() -> transferService.transfer(2L, idempotencyKey, request))
                     .isInstanceOf(WalletException.class);
@@ -502,7 +687,7 @@ class TransferServiceTest {
             verify(walletRepository, never()).findByIdForUpdate(any());
             verify(userService, never()).verifyPin(any(), any());
             verify(ledgerService, never()).executeDoubleEntry(any(), any(), any(), any());
-            verify(idempotencyService).releaseLock(senderRedisKey);
+            verify(idempotencyService).releaseLock(redisKey);
         }
     }
 }
