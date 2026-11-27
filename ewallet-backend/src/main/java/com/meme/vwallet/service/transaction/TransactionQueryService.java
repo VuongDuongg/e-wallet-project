@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.transaction;
 
 import com.meme.vwallet.dto.response.PageResponse;
 import com.meme.vwallet.dto.response.TransactionHistoryItemResponse;

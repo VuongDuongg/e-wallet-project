@@ -16,5 +16,6 @@ public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, Long> 
     @Query("SELECT le FROM LedgerEntry le WHERE le.transaction.id = :transactionId")
     List<LedgerEntry> findByTransactionId(@Param("transactionId") Long transactionId);
 
-    Page<LedgerEntry> findByWalletIdOrderByCreatedAtDescIdDesc(Long walletId, Pageable pageable);
+    @Query("SELECT le FROM LedgerEntry le WHERE le.wallet.id = :walletId ORDER BY le.createdAt DESC, le.id DESC")
+    Page<LedgerEntry> findByWalletIdOrderByCreatedAtDescIdDesc(@Param("walletId") Long walletId, Pageable pageable);
 }

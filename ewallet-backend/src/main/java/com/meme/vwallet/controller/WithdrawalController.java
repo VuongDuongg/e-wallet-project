@@ -3,7 +3,7 @@ package com.meme.vwallet.controller;
 import com.meme.vwallet.dto.request.WithdrawalRequest;
 import com.meme.vwallet.dto.response.WithdrawalResponse;
 import com.meme.vwallet.security.CurrentUser;
-import com.meme.vwallet.service.WithdrawalService;
+import com.meme.vwallet.service.withdrawal.WithdrawalService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;

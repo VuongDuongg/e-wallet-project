@@ -4,7 +4,7 @@ import com.meme.vwallet.dto.response.WalletResponse;
 import com.meme.vwallet.entity.enums.WalletStatus;
 import com.meme.vwallet.exception.GlobalExceptionHandler;
 import com.meme.vwallet.security.CurrentUserArgumentResolver;
-import com.meme.vwallet.service.PaymentService;
+import com.meme.vwallet.service.payment.PaymentService;
 import com.meme.vwallet.support.SecurityTestUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

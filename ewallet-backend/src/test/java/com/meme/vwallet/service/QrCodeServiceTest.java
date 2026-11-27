@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.qr.QrCodeService;
+
 import com.meme.vwallet.dto.request.QrGenerateRequest;
 import com.meme.vwallet.dto.request.QrParseRequest;
 import com.meme.vwallet.dto.response.QrGenerateResponse;

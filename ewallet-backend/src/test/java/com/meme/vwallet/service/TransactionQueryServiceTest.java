@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.transaction.TransactionQueryService;
+
 import com.meme.vwallet.dto.response.PageResponse;
 import com.meme.vwallet.dto.response.TransactionHistoryItemResponse;
 import com.meme.vwallet.entity.Transaction;

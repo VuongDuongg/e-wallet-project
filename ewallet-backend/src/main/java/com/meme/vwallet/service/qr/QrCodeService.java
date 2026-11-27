@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.qr;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.meme.vwallet.dto.request.QrGenerateRequest;

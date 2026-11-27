@@ -1,4 +1,7 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.transfer;
+
+import com.meme.vwallet.service.ledger.LedgerService;
+import com.meme.vwallet.service.user.UserService;
 
 import com.meme.vwallet.dto.request.TransferRequest;
 import com.meme.vwallet.dto.response.TransferResponse;

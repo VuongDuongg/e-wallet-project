@@ -1,7 +1,7 @@
 package com.meme.vwallet.controller;
 
-import com.meme.vwallet.service.NotificationService;
-import com.meme.vwallet.service.SseEmitterRegistry;
+import com.meme.vwallet.service.notification.NotificationService;
+import com.meme.vwallet.service.notification.SseEmitterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

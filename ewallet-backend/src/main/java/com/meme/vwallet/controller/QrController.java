@@ -5,7 +5,7 @@ import com.meme.vwallet.dto.request.QrParseRequest;
 import com.meme.vwallet.dto.response.QrGenerateResponse;
 import com.meme.vwallet.dto.response.QrParseResponse;
 import com.meme.vwallet.security.CurrentUser;
-import com.meme.vwallet.service.QrCodeService;
+import com.meme.vwallet.service.qr.QrCodeService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;

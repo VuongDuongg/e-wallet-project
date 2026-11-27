@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.auth.AuthService;
+
 import com.meme.vwallet.dto.request.LoginRequest;
 import com.meme.vwallet.dto.request.RefreshTokenRequest;
 import com.meme.vwallet.dto.request.RegisterRequest;

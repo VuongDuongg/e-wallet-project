@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.user.UserService;
+
 import com.meme.vwallet.entity.User;
 import com.meme.vwallet.exception.InvalidPinException;
 import com.meme.vwallet.exception.PinNotSetException;

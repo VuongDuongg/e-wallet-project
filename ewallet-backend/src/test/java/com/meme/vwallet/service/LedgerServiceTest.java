@@ -1,5 +1,7 @@
 package com.meme.vwallet.service;
 
+import com.meme.vwallet.service.ledger.LedgerService;
+
 import com.meme.vwallet.entity.LedgerEntry;
 import com.meme.vwallet.entity.Transaction;
 import com.meme.vwallet.entity.Wallet;

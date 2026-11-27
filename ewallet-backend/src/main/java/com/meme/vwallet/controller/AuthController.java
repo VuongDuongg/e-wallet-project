@@ -6,7 +6,7 @@ import com.meme.vwallet.dto.request.RefreshTokenRequest;
 import com.meme.vwallet.dto.request.RegisterRequest;
 import com.meme.vwallet.dto.response.AuthResponse;
 import com.meme.vwallet.security.UserPrincipal;
-import com.meme.vwallet.service.AuthService;
+import com.meme.vwallet.service.auth.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

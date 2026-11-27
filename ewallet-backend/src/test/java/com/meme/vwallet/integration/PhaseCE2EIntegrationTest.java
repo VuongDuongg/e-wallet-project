@@ -20,7 +20,7 @@ import com.meme.vwallet.repository.TransactionRepository;
 import com.meme.vwallet.repository.UserRepository;
 import com.meme.vwallet.repository.WalletRepository;
 import com.meme.vwallet.repository.WithdrawalRepository;
-import com.meme.vwallet.service.VnpayService;
+import com.meme.vwallet.service.payment.VnpayService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

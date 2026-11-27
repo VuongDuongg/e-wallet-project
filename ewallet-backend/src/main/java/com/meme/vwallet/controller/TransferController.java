@@ -3,7 +3,7 @@ package com.meme.vwallet.controller;
 import com.meme.vwallet.dto.request.TransferRequest;
 import com.meme.vwallet.dto.response.TransferResponse;
 import com.meme.vwallet.security.CurrentUser;
-import com.meme.vwallet.service.TransferService;
+import com.meme.vwallet.service.transfer.TransferService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;

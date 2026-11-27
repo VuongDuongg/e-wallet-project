@@ -1,4 +1,4 @@
-package com.meme.vwallet.service;
+package com.meme.vwallet.service.notification;
 
 import com.meme.vwallet.dto.response.NotificationResponse;
 import com.meme.vwallet.dto.response.PageResponse;
